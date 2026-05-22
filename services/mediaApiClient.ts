@@ -1,0 +1,247 @@
+import { AspectRatio } from "../types";
+
+export interface MediaAsset {
+  id: string;
+  type: "video" | "image" | "audio";
+  srcUrl: string;
+  thumbnailUrl: string;
+  duration?: number;
+  width?: number;
+  height?: number;
+  title?: string;
+  author?: string;
+  source: "pexels" | "pixabay";
+}
+
+// 1. Keyword Extraction Logic
+export const extractSearchKeywords = (prompt: string): string => {
+  // Strip out generic styling words
+  const stopWords = [
+    "cinematic",
+    "4k",
+    "8k",
+    "hyperrealistic",
+    "photorealistic",
+    "ultra",
+    "detailed",
+    "high resolution",
+    "masterpiece",
+    "trending",
+    "artstation",
+    "macro",
+    "shot",
+    "of",
+    "a",
+    "the",
+    "an",
+    "in",
+    "on",
+    "with",
+    "by",
+    "and",
+    "or",
+    "is",
+    "at",
+  ];
+
+  let words = prompt
+    .toLowerCase()
+    .replace(/[^\w\s]/g, "")
+    .split(/\s+/);
+  words = words.filter((word) => word.length > 2 && !stopWords.includes(word));
+
+  // Return the first 3-4 significant words
+  return words.slice(0, 4).join(" ");
+};
+
+// 2. API Clients
+const PEXELS_API_KEY = import.meta.env.VITE_PEXELS_API_KEY || "";
+const PIXABAY_API_KEY = import.meta.env.VITE_PIXABAY_API_KEY || "";
+
+export const searchPexelsVideo = async (
+  query: string,
+  orientation: "portrait" | "landscape" | "square",
+): Promise<MediaAsset[]> => {
+  if (!PEXELS_API_KEY) throw new Error("Pexels API key is missing");
+  // pexels orientation: landscape, portrait or square
+  const res = await fetch(
+    `https://api.pexels.com/videos/search?query=${encodeURIComponent(query)}&orientation=${orientation}&per_page=15`,
+    {
+      headers: { Authorization: PEXELS_API_KEY },
+    },
+  );
+  if (!res.ok) {
+    if (res.status === 429) throw new Error("Pexels API Rate Limit Exceeded");
+    throw new Error(`Pexels API Error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.videos
+    .map((v: any) => {
+      // find best hd file
+      let bestFile = v.video_files.find(
+        (f: any) => f.quality === "hd" && f.link,
+      );
+      if (!bestFile)
+        bestFile = v.video_files.find((f: any) => f.quality === "sd" && f.link);
+      if (!bestFile && v.video_files.length > 0) bestFile = v.video_files[0];
+
+      return {
+        id: `pexels-v-${v.id}`,
+        type: "video",
+        srcUrl: bestFile?.link || "",
+        thumbnailUrl: v.image,
+        duration: v.duration,
+        width: v.width,
+        height: v.height,
+        title:
+          v.url.split("/").filter(Boolean).pop()?.replace(/-/g, " ") ||
+          "Pexels Video",
+        author: v.user.name,
+        source: "pexels",
+      };
+    })
+    .filter((asset: MediaAsset) => asset.srcUrl);
+};
+
+export const searchPixabayVideo = async (
+  query: string,
+): Promise<MediaAsset[]> => {
+  if (!PIXABAY_API_KEY) throw new Error("Pixabay API key is missing");
+  const res = await fetch(
+    `https://pixabay.com/api/videos/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&per_page=15`,
+  );
+  if (!res.ok) {
+    if (res.status === 429) throw new Error("Pixabay API Rate Limit Exceeded");
+    throw new Error(`Pixabay API Error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.hits.map((v: any) => {
+    return {
+      id: `pixabay-v-${v.id}`,
+      type: "video",
+      srcUrl: v.videos.medium.url || v.videos.small.url,
+      thumbnailUrl: `https://i.vimeocdn.com/video/${v.picture_id}_640x360.jpg`,
+      duration: v.duration,
+      width: v.videos.medium.width || v.videos.small.width,
+      height: v.videos.medium.height || v.videos.small.height,
+      title: v.tags,
+      author: v.user,
+      source: "pixabay",
+    };
+  });
+};
+
+export const searchPexelsImage = async (
+  query: string,
+  orientation: "portrait" | "landscape" | "square",
+): Promise<MediaAsset[]> => {
+  if (!PEXELS_API_KEY) throw new Error("Pexels API key is missing");
+  const res = await fetch(
+    `https://api.pexels.com/v1/search?query=${encodeURIComponent(query)}&orientation=${orientation}&per_page=15`,
+    {
+      headers: { Authorization: PEXELS_API_KEY },
+    },
+  );
+  if (!res.ok) {
+    if (res.status === 429) throw new Error("Pexels API Rate Limit Exceeded");
+    throw new Error(`Pexels API Error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.photos.map((p: any) => ({
+    id: `pexels-i-${p.id}`,
+    type: "image",
+    srcUrl: p.src.large,
+    thumbnailUrl: p.src.medium,
+    width: p.width,
+    height: p.height,
+    title: p.alt || "Pexels Image",
+    author: p.photographer,
+    source: "pexels",
+  }));
+};
+
+export const searchPixabayImage = async (
+  query: string,
+): Promise<MediaAsset[]> => {
+  if (!PIXABAY_API_KEY) throw new Error("Pixabay API key is missing");
+  const res = await fetch(
+    `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&image_type=photo&per_page=15`,
+  );
+  if (!res.ok) {
+    if (res.status === 429) throw new Error("Pixabay API Rate Limit Exceeded");
+    throw new Error(`Pixabay API Error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.hits.map((p: any) => ({
+    id: `pixabay-i-${p.id}`,
+    type: "image",
+    srcUrl: p.largeImageURL,
+    thumbnailUrl: p.webformatURL,
+    width: p.imageWidth,
+    height: p.imageHeight,
+    title: p.tags,
+    author: p.user,
+    source: "pixabay",
+  }));
+};
+
+export const searchPixabayAudio = async (
+  query: string,
+): Promise<MediaAsset[]> => {
+  if (!PIXABAY_API_KEY) throw new Error("Pixabay API key is missing");
+  const res = await fetch(
+    `https://pixabay.com/api/audio/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(query)}&per_page=15`,
+  );
+  if (!res.ok) {
+    if (res.status === 429) throw new Error("Pixabay API Rate Limit Exceeded");
+    throw new Error(`Pixabay API Error: ${res.status}`);
+  }
+  const data = await res.json();
+  return data.hits.map((a: any) => ({
+    id: `pixabay-a-${a.id}`,
+    type: "audio",
+    srcUrl: a.audio_download || data.url, // Actually pixabay audio returns sometimes differently, but we'll try audio? Wait, pixabay audio API?
+    thumbnailUrl:
+      "https://cdn.pixabay.com/audio/2021/08/17/12-07-06-880_200x200.jpg", // dummy
+    duration: a.duration,
+    title: a.name || "Pixabay Audio",
+    author: a.user,
+    source: "pixabay",
+  }));
+};
+
+export const fetchFallbackMedia = async (
+  prompt: string,
+  aspectRatio: AspectRatio,
+): Promise<MediaAsset | null> => {
+  let isVertical =
+    aspectRatio === AspectRatio.VERTICAL || aspectRatio === AspectRatio.FEED;
+  let orientation: "portrait" | "landscape" | "square" = isVertical
+    ? "portrait"
+    : aspectRatio === AspectRatio.SQUARE
+      ? "square"
+      : "landscape";
+
+  const keywords = extractSearchKeywords(prompt);
+  if (!keywords) return null;
+
+  try {
+    // 1. Try Pexels Video
+    const pexelsVideos = await searchPexelsVideo(keywords, orientation);
+    if (pexelsVideos.length > 0) return pexelsVideos[0];
+  } catch (e) {
+    console.warn("Pexels video fallback failed:", e);
+  }
+
+  try {
+    // 2. Try Pixabay Video
+    const pixabayVideos = await searchPixabayVideo(keywords);
+    // For pixabay, try to filter by orientation if possible but not strictly required
+    if (pixabayVideos.length > 0) return pixabayVideos[0];
+  } catch (e) {
+    console.warn("Pixabay video fallback failed:", e);
+  }
+
+  // Return null if all failed, signaling the need for AI Image Generation fallback
+  return null;
+};
