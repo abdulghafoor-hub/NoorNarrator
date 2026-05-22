@@ -69,6 +69,7 @@ import {
   analyzeVoiceActivity,
   applyAudioDucking,
 } from "./utils/audioEffects";
+import { useVideoEngine } from "./hooks/useVideoEngine";
 import { Timeline } from "./components/Timeline";
 import { AssetLibrary } from "./components/AssetLibrary";
 import { MediaAsset } from "./services/mediaApiClient";
@@ -201,8 +202,6 @@ const App: React.FC = () => {
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [bgmError, setBgmError] = useState<string | null>(null);
-  const [playbackStatus, setPlaybackStatus] =
-    useState<PlaybackStatus>("stopped");
   const [isEditing, setIsEditing] = useState(false);
 
   const [currentResult, setCurrentResult] = useState<{
@@ -219,29 +218,39 @@ const App: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false);
   const [bgmBuffer, setBgmBuffer] = useState<AudioBuffer | null>(null);
 
-  const audioContextRef = useRef<AudioContext | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const recordCanvasRef = useRef<HTMLCanvasElement>(null);
 
-  // Cache for loaded background elements (Images/Videos)
-  const loadedAssetsRef = useRef<
-    Map<string, HTMLImageElement | HTMLVideoElement>
-  >(new Map());
-  const layoutCache = useRef<LayoutCache>(new Map());
-
   const stopSignalRef = useRef<boolean>(false);
-  const previewRequestRef = useRef<number>(0);
-  const currentPreviewSourceRef = useRef<HTMLAudioElement | null>(null);
-  const currentBgmSourceRef = useRef<AudioBufferSourceNode | null>(null);
-  const playbackStartTimeRef = useRef<number>(0);
-  const pauseOffsetRef = useRef<number>(0);
-  const globalTimeRef = useRef<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const audioDuration = useMemo(
-    () => currentResult?.audioBuffer?.duration || 10,
-    [currentResult],
-  );
+  // Order active backgrounds based on the SELECTION array order
+  const activeBgs = useMemo(() => {
+    return settings.selectedBackgroundIds
+      .map((id) => backgrounds.find((bg) => bg.id === id))
+      .filter((bg): bg is BackgroundAsset => !!bg);
+  }, [backgrounds, settings.selectedBackgroundIds]);
+
+  const {
+    playbackStatus,
+    globalTimeRef,
+    playPreview,
+    pausePreview,
+    stopPreview,
+    handleScrub,
+    loadedAssetsRef,
+    audioDuration,
+    audioCtxRef,
+    layoutCache,
+  } = useVideoEngine({
+    canvasRef,
+    settings,
+    layers,
+    activeBgs,
+    audioBuffer: currentResult?.audioBuffer || null,
+    audioUrl: currentResult?.audioUrl || null,
+    bgmBuffer,
+  });
 
   const duration = useMemo(
     () => audioDuration / (settings.videoSpeed || 1),
@@ -268,10 +277,9 @@ const App: React.FC = () => {
           throw new Error(`HTTP error! status: ${response.status}`);
         }
         const arrayBuffer = await response.arrayBuffer();
-        if (!audioContextRef.current)
-          audioContextRef.current = new AudioContext({ sampleRate: 24000 });
-        const decoded =
-          await audioContextRef.current.decodeAudioData(arrayBuffer);
+        if (!audioCtxRef.current)
+          audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
+        const decoded = await audioCtxRef.current.decodeAudioData(arrayBuffer);
         setBgmBuffer(decoded);
       } catch (e: any) {
         console.error("Failed to load BGM:", e);
@@ -323,132 +331,6 @@ const App: React.FC = () => {
     }
   }, [currentResult, audioDuration, settings.text, settings.animationType]);
 
-  // Order active backgrounds based on the SELECTION array order
-  const activeBgs = useMemo(() => {
-    return settings.selectedBackgroundIds
-      .map((id) => backgrounds.find((bg) => bg.id === id))
-      .filter((bg): bg is BackgroundAsset => !!bg);
-  }, [backgrounds, settings.selectedBackgroundIds]);
-
-  useEffect(() => {
-    const loadAssets = async () => {
-      const newLoaded = new Map(loadedAssetsRef.current);
-
-      for (const bg of activeBgs) {
-        if (!newLoaded.has(bg.id)) {
-          if (bg.type === "video") {
-            const v = document.createElement("video");
-            v.src = bg.url;
-            v.muted = true;
-            v.loop = true;
-            v.crossOrigin = "anonymous";
-            v.playbackRate = settings.videoSpeed || 1.0;
-            v.play().catch(() => {});
-            newLoaded.set(bg.id, v);
-          } else {
-            const img = new Image();
-            img.crossOrigin = "anonymous";
-            img.src = bg.url;
-            await new Promise((resolve) => {
-              if (img.complete) resolve(true);
-              else img.onload = () => resolve(true);
-            });
-            newLoaded.set(bg.id, img);
-          }
-        }
-      }
-      loadedAssetsRef.current = newLoaded;
-    };
-    loadAssets();
-  }, [activeBgs]);
-
-  useEffect(() => {
-    loadedAssetsRef.current.forEach((asset) => {
-      if (asset instanceof HTMLVideoElement) {
-        asset.playbackRate = settings.videoSpeed || 1.0;
-      }
-    });
-  }, [settings.videoSpeed]);
-
-  useEffect(() => {
-    const draw = () => {
-      if (!canvasRef.current) return;
-      const config = ASPECT_RATIO_CONFIG[settings.aspectRatio];
-      if (
-        canvasRef.current.width !== config.width ||
-        canvasRef.current.height !== config.height
-      ) {
-        canvasRef.current.width = config.width;
-        canvasRef.current.height = config.height;
-      }
-
-      // Prepare assets list for the drawer - ensure strictly following activeBgs order + layer assets
-      const assetsToDraw = activeBgs
-        .map((bg) => ({
-          id: bg.id,
-          type: bg.type,
-          element: loadedAssetsRef.current.get(bg.id),
-        }))
-        .filter((a) => a.element) as {
-        element: HTMLImageElement | HTMLVideoElement;
-        type: "image" | "video";
-        id: string;
-      }[];
-
-      layers.forEach((layer) => {
-        if (
-          (layer.type === LayerType.VIDEO || layer.type === LayerType.IMAGE) &&
-          loadedAssetsRef.current.has(layer.id)
-        ) {
-          assetsToDraw.push({
-            id: layer.id,
-            type: layer.type === LayerType.VIDEO ? "video" : "image",
-            element: loadedAssetsRef.current.get(layer.id)!,
-          });
-        }
-      });
-
-      let audioTime = 0;
-      if (playbackStatus === "playing" && audioContextRef.current) {
-        audioTime =
-          pauseOffsetRef.current +
-          (audioContextRef.current.currentTime - playbackStartTimeRef.current) *
-            (settings.videoSpeed || 1.0);
-      } else if (playbackStatus === "paused") {
-        audioTime = pauseOffsetRef.current;
-      }
-
-      globalTimeRef.current = audioTime % audioDuration || audioTime;
-
-      drawVideoFrame(
-        canvasRef.current,
-        activeBgs
-          .filter((bg) => loadedAssetsRef.current.has(bg.id))
-          .map((bg) => ({
-            id: bg.id,
-            type: bg.type,
-            element: loadedAssetsRef.current.get(bg.id) as any,
-          })),
-        layers,
-        audioTime % audioDuration,
-        audioDuration,
-        settings.backgroundAnimation,
-        layoutCache.current,
-        loadedAssetsRef.current,
-      );
-      previewRequestRef.current = requestAnimationFrame(draw);
-    };
-    draw();
-    return () => cancelAnimationFrame(previewRequestRef.current);
-  }, [
-    currentResult,
-    settings,
-    playbackStatus,
-    layers,
-    audioDuration,
-    activeBgs,
-  ]);
-
   const handleGenerate = async () => {
     if (!settings.text.trim()) return;
     setIsGenerating(true);
@@ -459,8 +341,8 @@ const App: React.FC = () => {
     layoutCache.current.clear(); // Clear cache on new generation
 
     try {
-      if (!audioContextRef.current)
-        audioContextRef.current = new AudioContext({ sampleRate: 24000 });
+      if (!audioCtxRef.current)
+        audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
 
       // Pass user's text down directly without changing it
       const processedScript = settings.text;
@@ -476,7 +358,7 @@ const App: React.FC = () => {
       const audioData = decode(base64Audio);
       const audioBuffer = await decodeAudioData(
         audioData,
-        audioContextRef.current,
+        audioCtxRef.current,
         24000,
         1,
       );
@@ -795,147 +677,6 @@ const App: React.FC = () => {
     );
   };
 
-  const playPreview = async () => {
-    if (
-      !currentResult?.audioUrl ||
-      !currentResult?.audioBuffer ||
-      !audioContextRef.current
-    )
-      return;
-    const ctx = audioContextRef.current;
-    if (ctx.state === "suspended") await ctx.resume();
-    if (pauseOffsetRef.current >= audioDuration) pauseOffsetRef.current = 0;
-
-    const audioEl = new Audio(currentResult.audioUrl);
-    audioEl.crossOrigin = "anonymous";
-    audioEl.preservesPitch = true;
-    audioEl.playbackRate = settings.videoSpeed || 1;
-    audioEl.currentTime = pauseOffsetRef.current;
-    currentPreviewSourceRef.current = audioEl;
-
-    audioEl.onended = () => {
-      if (currentPreviewSourceRef.current === audioEl) {
-        setPlaybackStatus("stopped");
-        pauseOffsetRef.current = 0;
-        currentPreviewSourceRef.current = null;
-      }
-    };
-
-    // Add Spiritual Studio Reverb & EQ
-    const voiceSource = ctx.createMediaElementSource(audioEl);
-    createSpiritualStudioChain(ctx, voiceSource, ctx.destination);
-
-    audioEl.play().catch((e) => console.error(e));
-
-    // Handle Intro Delay Logic
-    const currentHead = pauseOffsetRef.current;
-    const when = ctx.currentTime;
-
-    // BGM Logic
-    if (settings.bgmEnabled && bgmBuffer) {
-      const bgmSource = ctx.createBufferSource();
-      bgmSource.buffer = bgmBuffer;
-      bgmSource.loop = true;
-      const gainNode = ctx.createGain();
-      gainNode.gain.value = settings.bgmVolume;
-
-      const voiceSegments = analyzeVoiceActivity(currentResult.audioBuffer);
-      applyAudioDucking(
-        gainNode,
-        settings.bgmVolume,
-        voiceSegments,
-        when - currentHead,
-      );
-
-      bgmSource.connect(gainNode);
-      gainNode.connect(ctx.destination);
-      currentBgmSourceRef.current = bgmSource;
-
-      // BGM plays continuously from current offset
-      const bgmOffset = currentHead % bgmBuffer.duration;
-      bgmSource.start(ctx.currentTime, bgmOffset);
-    }
-
-    // Sync all video elements
-    loadedAssetsRef.current.forEach((asset) => {
-      if (asset instanceof HTMLVideoElement) {
-        asset.play().catch(() => {});
-      }
-    });
-
-    playbackStartTimeRef.current = ctx.currentTime;
-    setPlaybackStatus("playing");
-  };
-
-  const pausePreview = () => {
-    if (!currentPreviewSourceRef.current || !audioContextRef.current) return;
-    pauseOffsetRef.current +=
-      (audioContextRef.current.currentTime - playbackStartTimeRef.current) *
-      (settings.videoSpeed || 1.0);
-    currentPreviewSourceRef.current.pause();
-    currentPreviewSourceRef.current = null;
-    if (currentBgmSourceRef.current) {
-      currentBgmSourceRef.current.stop();
-      currentBgmSourceRef.current = null;
-    }
-
-    loadedAssetsRef.current.forEach((asset) => {
-      if (asset instanceof HTMLVideoElement) {
-        asset.pause();
-      }
-    });
-
-    setPlaybackStatus("paused");
-  };
-
-  const stopPreview = () => {
-    if (currentPreviewSourceRef.current) {
-      currentPreviewSourceRef.current.pause();
-      currentPreviewSourceRef.current = null;
-    }
-    if (currentBgmSourceRef.current) {
-      currentBgmSourceRef.current.stop();
-      currentBgmSourceRef.current = null;
-    }
-
-    loadedAssetsRef.current.forEach((asset) => {
-      if (asset instanceof HTMLVideoElement) {
-        asset.pause();
-      }
-    });
-
-    pauseOffsetRef.current = 0;
-    setPlaybackStatus("stopped");
-  };
-
-  const handleScrub = (time: number) => {
-    pauseOffsetRef.current = time;
-    globalTimeRef.current = time;
-    if (playbackStatus === "playing") {
-      if (currentPreviewSourceRef.current) {
-        currentPreviewSourceRef.current.currentTime = time;
-      }
-      if (audioContextRef.current) {
-        playbackStartTimeRef.current =
-          audioContextRef.current.currentTime -
-          time / (settings.videoSpeed || 1.0);
-      }
-    } else {
-      setPlaybackStatus("paused"); // Force rendering frame
-
-      // SYNC VIDEO ELEMENTS FOR DETERMINISTIC PREVIEW
-      loadedAssetsRef.current.forEach((asset) => {
-        if (
-          asset instanceof HTMLVideoElement &&
-          !isNaN(asset.duration) &&
-          asset.duration > 0
-        ) {
-          asset.currentTime = time % asset.duration;
-        }
-      });
-    }
-  };
-
   const handleSplitLayer = (id: string, time: number) => {
     setLayers((prev) => {
       const layerIdx = prev.findIndex((l) => l.id === id);
@@ -1003,12 +744,12 @@ const App: React.FC = () => {
 
       // Ensure offscreen video assets are tracked
       const exportAssets = activeBgs
+        .filter((bg) => loadedAssetsRef.current.has(bg.id))
         .map((bg) => ({
           id: bg.id,
           type: bg.type,
-          element: loadedAssetsRef.current.get(bg.id),
-        }))
-        .filter((a) => a.element) as any[];
+          element: loadedAssetsRef.current.get(bg.id)!,
+        }));
 
       layers.forEach((layer) => {
         if (
@@ -1018,7 +759,7 @@ const App: React.FC = () => {
           exportAssets.push({
             id: layer.id,
             type: layer.type === LayerType.VIDEO ? "video" : "image",
-            element: loadedAssetsRef.current.get(layer.id)!,
+            element: loadedAssetsRef.current.get(layer.id)! as any,
           });
         }
       });
@@ -1040,12 +781,13 @@ const App: React.FC = () => {
           });
           drawVideoFrame(
             canvas,
-            exportAssets,
+            exportAssets as any,
             layers,
             time * (settings.videoSpeed || 1.0),
             audioDuration,
             settings.backgroundAnimation,
             layoutCache.current,
+            loadedAssetsRef.current,
           );
         },
         renderedAudio,
