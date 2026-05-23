@@ -168,20 +168,34 @@ export const generateSEOMetadata = async (
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
   const prompt = `
-    Analyze this video script and generate highly viral SEO metadata in JSON format to maximize reach and views.
-    
-    1. **titleOptions**: Generate THREE title options that force a "click" by posing a high-stakes question or highlighting a hidden reality.
-       - Option 1: Must be a question (e.g., "قبر میں عذاب کا مسلسل سبب؟").
-       - Option 2: Must be a warning (e.g., "وہ بوجھ جو مرنے کے بعد بھی ختم نہیں ہوتا").
-       - Option 3: Must be a success-oriented SEO title (e.g., "گناہِ جاریہ: وہ غلطیاں جن سے بچنا لازمی ہے").
-    
-    2. **description**: Write a deeply engaging, viral description in a mix of languages (Roman Urdu, Urdu script, and English) to get more audience and views. Use emojis, make it conversational, and include a call to action (like, subscribe, share).
-    
-    3. **keywords**: Generate a list of 20+ highly trending, viral tags. Include a mix of English, Urdu, and Roman Urdu keywords that people are currently searching for. Do NOT use hashtags (#) in the keywords array itself, just the words.
-    
-    4. **thumbnailText**: A punchy 1 to 2 line hook text (about 4-8 words) strictly in the Urdu language (Urdu script) to overlay on the thumbnail. It MUST use extreme psychological curiosity gaps (e.g., "The hidden truth...", "Why everyone is wrong..."). It must leave an unanswered question or reveal a shocking half-truth so the viewer feels an absolute, irresistible urge to click.
+    You are an expert YouTube SEO Strategist for a highly successful Islamic/Spiritual channel. Analyze the following video script and generate viral SEO metadata in JSON format.
 
-    Script: ${script}
+    ### 1. TITLE OPTIONS (CRITICAL FOR CTR)
+    Generate 3 highly clickable title options. They must be UNDER 65 characters so they don't get cut off on mobile. Use a bilingual structure (English + Roman Urdu/Urdu script) to capture maximum search traffic.
+    - Option 1 (The Curiosity Hook): Focus on a hidden truth or deep question. (e.g., "Why You Feel Lost? | Dil Ka Sukoon 🤍")
+    - Option 2 (The Solution/Listicle): Focus on actionable steps or a direct cure. (e.g., "3 Steps to Stop Overthinking | پریشانی کا قرآنی علاج")
+    - Option 3 (The Emotional Trigger): Target a specific pain point like anxiety, fear, or sadness. (e.g., "Listen to this when you are Sad | Quranic Cure ✨")
+
+    ### 2. DESCRIPTION (ALGORITHM OPTIMIZED)
+    Write a highly optimized YouTube description using this exact structure:
+    - First 2 lines: A strong hook addressing the viewer's pain point (in English & Roman Urdu) using targeted keywords.
+    - Summary: 2-3 sentences summarizing the spiritual reminder.
+    - Chapters/Timestamps: Generate 3 to 4 logical timestamps based on the flow of the script (e.g., "00:00 - Are you overthinking?", "00:15 - The Quranic solution").
+    - Call to Action: "Subscribe to LifeBeauty for daily Islamic reminders. Share this as Sadqa-e-Jaria!"
+
+    ### 3. VIRAL KEYWORDS
+    Generate an array of exactly 20 highly searched tags. Include a mix of:
+    - Broad English search terms (e.g., "Quranic cure for anxiety", "Islamic reminders")
+    - Roman Urdu pain-point terms (e.g., "pareshani ka ilaj", "dil ka sukoon", "overthinking in islam")
+    Do NOT include the '#' symbol in the array items.
+
+    ### 4. THUMBNAIL TEXT
+    Generate a 2 to 5 word punchy hook in bold Urdu script (e.g., "یہ غلطی مت کریں!"). It must create an irresistible urge to click by leaving a curiosity gap.
+
+    Script to analyze:
+    """
+    ${script}
+    """
   `;
 
   try {
@@ -212,9 +226,9 @@ export const generateSEOMetadata = async (
   } catch (e) {
     console.error("SEO generation failed", e);
     return {
-      titleOptions: ["Generated Video", "Must Watch", "Trending Now"],
-      description: "",
-      keywords: [],
+      titleOptions: ["Islamic Reminder | LifeBeauty", "Quranic Cure For The Heart", "Beautiful Sunnah to Practice"],
+      description: "Subscribe for daily Islamic reminders and beautiful Quran recitations.",
+      keywords: ["islamic status", "quran recitation", "lifebeauty"],
     };
   }
 };
