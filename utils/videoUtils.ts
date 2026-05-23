@@ -1,3 +1,4 @@
+import React from "react";
 import {
   AnimationType,
   EditorLayer,
@@ -985,7 +986,7 @@ const drawBackgroundSlideshow = (
       // Resolve RANDOM to a specific animation based on the slide index
       let activeAnim = bgAnim;
       if (activeAnim === BackgroundAnimation.RANDOM) {
-        const animOptions = [
+        const animOptions: BackgroundAnimation[] = [
           BackgroundAnimation.ZOOM_IN,
           BackgroundAnimation.PAN_LEFT,
           BackgroundAnimation.CINEMATIC_3D,

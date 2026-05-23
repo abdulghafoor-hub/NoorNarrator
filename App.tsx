@@ -409,6 +409,8 @@ const App: React.FC = () => {
       const thumbData = results[1] as {
         visualPrompt: string;
         overlayText: string;
+        styleCategory: string;
+        colorPop: string;
       };
       const bgUrls = results.slice(2) as (string | null)[];
 
@@ -706,10 +708,11 @@ const App: React.FC = () => {
 
     try {
       // 1. Synthesize Audio via Offline Audio Context
+      const exportSampleRate = 48000;
       const offlineCtx = new OfflineAudioContext(
         currentResult.audioBuffer.numberOfChannels,
-        Math.ceil(duration * currentResult.audioBuffer.sampleRate),
-        currentResult.audioBuffer.sampleRate,
+        Math.ceil(duration * exportSampleRate),
+        exportSampleRate,
       );
 
       // Voice
@@ -794,15 +797,19 @@ const App: React.FC = () => {
         (progress) => setRecordProgress(progress * 100),
       );
 
+      console.log("Blob generated", blob.size, blob.type);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `noor-studio-${Date.now()}.webm`;
+      a.download = `noor-studio-${Date.now()}.mp4`;
       a.click();
-    } catch (e) {
-      console.error(e);
+
+      // Delay to ensure the download starts before object URL might get collected (rare but safe)
+      await new Promise((r) => setTimeout(r, 500));
+    } catch (e: any) {
+      console.error("Export Error:", e);
       setErrorMsg(
-        "Video Export failed or WebCodecs is unsupported in this browser.",
+        `Video Export failed: ${e?.message ?? "Unsupported in this browser."}`,
       );
     } finally {
       setIsRecording(false);
