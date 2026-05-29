@@ -63,6 +63,7 @@ import {
   decodeAudioData,
   analyzeAudioSilence,
   encodeAudioBufferToWav,
+  encode,
 } from "./utils/audioUtils";
 import {
   createSpiritualStudioChain,
@@ -137,7 +138,7 @@ const App: React.FC = () => {
       backgroundAnimation: BackgroundAnimation.ZOOM_IN,
       textPosition: TextPosition.CENTER,
       aspectRatio: AspectRatio.VERTICAL,
-      backgroundSource: BackgroundSource.AI,
+      backgroundSource: BackgroundSource.STOCK,
       selectedBackgroundIds: [], // Initialized as empty array
       bgmEnabled: false,
       bgmVolume: 0.15,
@@ -349,13 +350,39 @@ const App: React.FC = () => {
 
       const normalizedScript = normalizeText(processedScript);
 
-      // 1. Generate Narration
-      const base64Audio = await generateNarration(
-        normalizedScript,
-        settings.voice,
-      );
-      if (stopSignalRef.current) return;
-      const audioData = decode(base64Audio);
+      // 1. Generate Narration in chunks to prevent voice degradation on long texts
+      const chunks = normalizedScript.match(/[^.!?؟\n]+[.!?؟\n]*/g) || [normalizedScript];
+      let processedChunks: string[] = [];
+      let currentChunk = "";
+      for (const part of chunks) {
+        if ((currentChunk + part).length > 250) {
+          if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
+          currentChunk = part;
+        } else {
+          currentChunk += part;
+        }
+      }
+      if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
+      if (processedChunks.length === 0) processedChunks = [normalizedScript];
+
+      let audioData = new Uint8Array(0);
+      for (const chunk of processedChunks) {
+        if (stopSignalRef.current) return;
+        try {
+          const base64Audio = await generateNarration(chunk, settings.voice);
+          const chunkBytes = decode(base64Audio);
+          const newArr = new Uint8Array(audioData.length + chunkBytes.length);
+          newArr.set(audioData);
+          newArr.set(chunkBytes, audioData.length);
+          audioData = newArr;
+        } catch (err) {
+          console.warn("Failed to generate audio for chunk:", chunk, err);
+        }
+      }
+
+      if (audioData.length === 0) {
+        throw new Error("Failed to generate any audio narration.");
+      }
       const audioBuffer = await decodeAudioData(
         audioData,
         audioCtxRef.current,
@@ -379,25 +406,30 @@ const App: React.FC = () => {
       const bgPromises: Promise<string | null>[] = [];
 
       if (settings.generateImage) {
-        // Generate 3 images for a dynamic slideshow
-        bgPromises.push(
-          generateAtmosphereImage(
-            dynamicPrompt + ", scene 1, establishing shot",
-            targetRatio,
-          ),
-        );
-        bgPromises.push(
-          generateAtmosphereImage(
-            dynamicPrompt + ", scene 2, different perspective",
-            targetRatio,
-          ),
-        );
-        bgPromises.push(
-          generateAtmosphereImage(
-            dynamicPrompt + ", scene 3, cinematic detail",
-            targetRatio,
-          ),
-        );
+        if (settings.backgroundSource === BackgroundSource.STOCK) {
+          // Add dummy promise to maintain array structure
+          bgPromises.push(Promise.resolve(null), Promise.resolve(null), Promise.resolve(null));
+        } else {
+          // Generate 3 images for a dynamic slideshow
+          bgPromises.push(
+            generateAtmosphereImage(
+              dynamicPrompt + ", scene 1, establishing shot",
+              targetRatio,
+            ),
+          );
+          bgPromises.push(
+            generateAtmosphereImage(
+              dynamicPrompt + ", scene 2, different perspective",
+              targetRatio,
+            ),
+          );
+          bgPromises.push(
+            generateAtmosphereImage(
+              dynamicPrompt + ", scene 3, cinematic detail",
+              targetRatio,
+            ),
+          );
+        }
       }
 
       const results = await Promise.all([
@@ -412,19 +444,33 @@ const App: React.FC = () => {
         styleCategory: string;
         colorPop: string;
       };
-      const bgUrls = results.slice(2) as (string | null)[];
-
+      
       const newBgs: BackgroundAsset[] = [];
-      bgUrls.forEach((bgUrl, index) => {
-        if (bgUrl) {
+
+      if (settings.generateImage && settings.backgroundSource === BackgroundSource.STOCK) {
+        const { fetchMultipleFallbackMedia } = await import("./services/mediaApiClient");
+        const stockAssets = await fetchMultipleFallbackMedia(dynamicPrompt, settings.aspectRatio, 3);
+        stockAssets.forEach((asset, i) => {
           newBgs.push({
-            id: Date.now().toString() + index,
-            url: bgUrl,
-            source: BackgroundSource.AI,
-            type: "image",
+            id: Date.now().toString() + "-stock-" + i,
+            url: asset.srcUrl,
+            source: BackgroundSource.STOCK,
+            type: asset.type === "video" ? "video" : "image"
           });
-        }
-      });
+        });
+      } else {
+        const bgUrls = results.slice(2) as (string | null)[];
+        bgUrls.forEach((bgUrl, index) => {
+          if (bgUrl) {
+            newBgs.push({
+              id: Date.now().toString() + index,
+              url: bgUrl,
+              source: BackgroundSource.AI,
+              type: "image",
+            });
+          }
+        });
+      }
 
       if (newBgs.length > 0) {
         setBackgrounds((prev) => [...prev, ...newBgs]);
@@ -460,6 +506,7 @@ const App: React.FC = () => {
       }
 
       if (stopSignalRef.current) return;
+      const base64Audio = encode(audioData);
       setCurrentResult({
         audioUrl,
         audioBuffer,
@@ -532,23 +579,42 @@ const App: React.FC = () => {
   const generateAdditionalBG = async () => {
     setIsGeneratingBG(true);
     try {
-      const targetRatio = getGeminiAspectRatio(settings.aspectRatio);
-      const imageUrl = await generateAtmosphereImage(
-        settings.style,
-        targetRatio,
-      );
-      if (imageUrl) {
-        const newBg: BackgroundAsset = {
-          id: Date.now().toString(),
-          url: imageUrl,
-          source: BackgroundSource.AI,
-          type: "image",
-        };
-        setBackgrounds((prev) => [...prev, newBg]);
-        setSettings((s) => ({
-          ...s,
-          selectedBackgroundIds: [...s.selectedBackgroundIds, newBg.id],
-        }));
+      if (settings.backgroundSource === BackgroundSource.STOCK) {
+        const { fetchMultipleFallbackMedia } = await import("./services/mediaApiClient");
+        const stockAssets = await fetchMultipleFallbackMedia(settings.style, settings.aspectRatio, 1);
+        if (stockAssets.length > 0) {
+          const asset = stockAssets[0];
+          const newBg: BackgroundAsset = {
+            id: Date.now().toString(),
+            url: asset.srcUrl,
+            source: BackgroundSource.STOCK,
+            type: asset.type === "video" ? "video" : "image",
+          };
+          setBackgrounds((prev) => [...prev, newBg]);
+          setSettings((s) => ({
+            ...s,
+            selectedBackgroundIds: [...s.selectedBackgroundIds, newBg.id],
+          }));
+        }
+      } else {
+        const targetRatio = getGeminiAspectRatio(settings.aspectRatio);
+        const imageUrl = await generateAtmosphereImage(
+          settings.style,
+          targetRatio,
+        );
+        if (imageUrl) {
+          const newBg: BackgroundAsset = {
+            id: Date.now().toString(),
+            url: imageUrl,
+            source: BackgroundSource.AI,
+            type: "image",
+          };
+          setBackgrounds((prev) => [...prev, newBg]);
+          setSettings((s) => ({
+            ...s,
+            selectedBackgroundIds: [...s.selectedBackgroundIds, newBg.id],
+          }));
+        }
       }
     } catch (e: any) {
       setErrorMsg("Failed to generate background.");
@@ -1572,6 +1638,28 @@ const App: React.FC = () => {
                           </option>
                           <option value={VoiceName.ZEPHYR}>
                             Zephyr - Elegant Female
+                          </option>
+                        </select>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">
+                          Background Source
+                        </label>
+                        <select
+                          className="w-full bg-emerald-950/50 border border-emerald-900/40 rounded-xl p-4 text-sm text-emerald-100 focus:outline-none transition-all"
+                          value={settings.backgroundSource}
+                          onChange={(e) =>
+                            setSettings({
+                              ...settings,
+                              backgroundSource: e.target.value as BackgroundSource,
+                            })
+                          }
+                        >
+                          <option value={BackgroundSource.STOCK}>
+                            Stock Media (Pexels/Pixabay)
+                          </option>
+                          <option value={BackgroundSource.AI}>
+                            AI Generated (Imagen)
                           </option>
                         </select>
                       </div>

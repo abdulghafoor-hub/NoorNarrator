@@ -7,16 +7,36 @@ export const exportDeterministicVideo = async (
   width: number,
   height: number,
   drawFrame: (time: number) => void,
-  audioBuffer: AudioBuffer | null,
+  rawAudioBuffer: AudioBuffer | null,
   onProgress: (progress: number) => void,
 ): Promise<Blob> => {
+  let audioBuffer = rawAudioBuffer;
+  if (audioBuffer) {
+    const targetSampleRate = 48000;
+    const targetChannels = 2; // AAC encoder compatibility
+    const offlineCtx = new OfflineAudioContext(
+      targetChannels,
+      Math.ceil(audioBuffer.length * (targetSampleRate / audioBuffer.sampleRate)),
+      targetSampleRate
+    );
+    const source = offlineCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offlineCtx.destination);
+    source.start(0);
+    audioBuffer = await offlineCtx.startRendering();
+  }
+
+  const encWidth = width & ~1;
+  const encHeight = height & ~1;
+
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
     target,
+    fastStart: "in-memory",
     video: {
       codec: "avc",
-      width,
-      height,
+      width: encWidth,
+      height: encHeight,
     },
     audio: audioBuffer
       ? {
@@ -36,14 +56,22 @@ export const exportDeterministicVideo = async (
     },
   });
 
-  videoEncoder.configure({
+  const videoConfig: VideoEncoderConfig = {
     codec: "avc1.4d002a",
-    width,
-    height,
-    bitrate: 8_000_000,
+    width: encWidth,
+    height: encHeight,
+    bitrate: 5_000_000,
     framerate: fps,
     avc: { format: "avc" },
-  });
+  };
+
+  const videoSupport = await window.VideoEncoder.isConfigSupported(videoConfig);
+  if (!videoSupport.supported) {
+    console.warn("avc1.4d002a not supported, falling back to baseline avc1.42E028");
+    videoConfig.codec = "avc1.42E028";
+  }
+
+  videoEncoder.configure(videoConfig);
 
   let audioEncoder: any = null;
   let audioError: any = null;
@@ -57,12 +85,20 @@ export const exportDeterministicVideo = async (
       },
     });
 
-    audioEncoder.configure({
+    const audioConfig: AudioEncoderConfig = {
       codec: "mp4a.40.2",
       sampleRate: audioBuffer.sampleRate,
       numberOfChannels: audioBuffer.numberOfChannels,
       bitrate: 128_000,
-    });
+    };
+
+    const audioSupport = await window.AudioEncoder.isConfigSupported(audioConfig);
+    if (!audioSupport.supported) {
+      console.warn("mp4a.40.2 not supported, falling back to codec mp4a.67 or adjusting bitrate");
+      // Fallback or leave it as throws, but let's try configuring anyways or fallback to an allowed profile like mp4a.40.5
+      audioConfig.codec = "mp4a.40.5"; // HE-AAC
+    }
+    audioEncoder.configure(audioConfig);
   }
 
   const totalFrames = Math.ceil(duration * fps);
@@ -72,7 +108,7 @@ export const exportDeterministicVideo = async (
   const sampleRate = audioBuffer ? audioBuffer.sampleRate : 48000;
   const channels = audioBuffer ? audioBuffer.numberOfChannels : 2;
   const length = audioBuffer ? audioBuffer.length : 0;
-  const CHUNK_FRAMES = 48000 * 0.1; // 100ms chunks
+  const CHUNK_FRAMES = 1024; // AAC frames are 1024 samples long. Use exact chunks to prevent Encoding error.
 
   for (let i = 0; i < totalFrames; i++) {
     if (videoError) throw videoError;
@@ -86,38 +122,46 @@ export const exportDeterministicVideo = async (
         audioOffset < length &&
         audioOffset / sampleRate <= time + 1 / fps
       ) {
+        if (audioEncoder.state !== "configured") {
+          throw new Error(`Audio Encoder is closed: ${audioError?.message || "Unknown error"}`);
+        }
+
         if (audioEncoder.encodeQueueSize > 50) {
           await new Promise((r) => setTimeout(r, 0));
         }
 
         const end = Math.min(audioOffset + CHUNK_FRAMES, length);
-        const frameCount = end - audioOffset;
+        const actualFrames = end - audioOffset;
 
         const f32Arrays = [];
         for (let c = 0; c < channels; c++) {
           f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
         }
-        const combined = new Float32Array(frameCount * channels);
-        for (let c = 0; c < channels; c++) {
-          combined.set(f32Arrays[c], c * frameCount);
+        const combined = new Float32Array(actualFrames * channels);
+        for(let c = 0; c < channels; c++) {
+          combined.set(f32Arrays[c], c * actualFrames);
         }
 
         const audioData = new window.AudioData({
           format: "f32-planar",
           sampleRate,
-          numberOfFrames: frameCount,
+          numberOfFrames: actualFrames,
           numberOfChannels: channels,
-          timestamp: Math.round((audioOffset / sampleRate) * 1_000_000),
+          timestamp: Math.round((audioOffset * 1_000_000) / sampleRate),
           data: combined,
         });
 
         audioEncoder.encode(audioData);
         audioData.close();
-        audioOffset += CHUNK_FRAMES;
+        audioOffset += actualFrames;
       }
     }
 
     // 2. Encode Video Frame
+    if (videoEncoder.state !== "configured") {
+      throw new Error(`Video Encoder is closed: ${videoError?.message || "Unknown error"}`);
+    }
+
     if (videoEncoder.encodeQueueSize > 30) {
       await new Promise((r) => setTimeout(r, 10)); // let queue drain
     }
@@ -125,7 +169,7 @@ export const exportDeterministicVideo = async (
     drawFrame(time);
 
     const frame = new window.VideoFrame(canvas, {
-      timestamp: time * 1_000_000,
+      timestamp: Math.round((i * 1_000_000) / fps),
     });
 
     const keyFrame = i % fps === 0;
@@ -144,29 +188,29 @@ export const exportDeterministicVideo = async (
       if (audioError) throw audioError;
 
       const end = Math.min(audioOffset + CHUNK_FRAMES, length);
-      const frameCount = end - audioOffset;
+      const actualFrames = end - audioOffset;
 
       const f32Arrays = [];
       for (let c = 0; c < channels; c++) {
         f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
       }
-      const combined = new Float32Array(frameCount * channels);
-      for (let c = 0; c < channels; c++) {
-        combined.set(f32Arrays[c], c * frameCount);
+      const combined = new Float32Array(actualFrames * channels);
+      for(let c = 0; c < channels; c++) {
+        combined.set(f32Arrays[c], c * actualFrames);
       }
 
       const audioData = new window.AudioData({
         format: "f32-planar",
         sampleRate,
-        numberOfFrames: frameCount,
+        numberOfFrames: actualFrames,
         numberOfChannels: channels,
-        timestamp: Math.round((audioOffset / sampleRate) * 1_000_000),
+        timestamp: Math.round((audioOffset * 1_000_000) / sampleRate),
         data: combined,
       });
 
       audioEncoder.encode(audioData);
       audioData.close();
-      audioOffset += CHUNK_FRAMES;
+      audioOffset += actualFrames;
     }
   }
 

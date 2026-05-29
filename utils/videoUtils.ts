@@ -6,7 +6,105 @@ import {
   TextEffect,
   ImageEffect,
   BackgroundAnimation,
+  TextPosition,
 } from "../types";
+
+export const resolveTextScreenPosition = (
+  width: number,
+  height: number,
+  aspectRatio: string,
+  positionPreference: TextPosition | string,
+  customX: number | undefined,
+  customY: number | undefined,
+  isStickyHeadline: boolean,
+): { screenCenterX: number; screenCenterY: number } => {
+  // If custom coordinates exist, overriding all enum logic completely
+  if (customX !== undefined && customY !== undefined) {
+    return {
+      screenCenterX: customX * width,
+      screenCenterY: customY * height,
+    };
+  }
+
+  // Define Safe Zone Margins Based on Aspect Ratio
+  let topMargin = height * 0.15;
+  let bottomMargin = height * 0.15;
+  let sideMargin = width * 0.1;
+
+  if (aspectRatio === "9:16") {
+    // Vertical
+    topMargin = height * 0.18;
+    bottomMargin = height * 0.25;
+  } else if (aspectRatio === "16:9") {
+    // Landscape
+    topMargin = height * 0.12;
+    bottomMargin = height * 0.12;
+  } else if (aspectRatio === "1:1") {
+    // Square
+    topMargin = height * 0.15;
+    bottomMargin = height * 0.15;
+  }
+
+  // Handle Sticky Headline Override
+  let pos = positionPreference;
+  if (pos === "Top" && !isStickyHeadline) {
+    pos = "Bottom";
+  }
+
+  // Position Routing
+  let screenCenterX = width / 2;
+  let screenCenterY = height / 2;
+
+  switch (pos) {
+    case "Center":
+      screenCenterX = width / 2;
+      screenCenterY = height / 2;
+      break;
+    case "Top":
+      screenCenterX = width / 2;
+      screenCenterY = topMargin;
+      break;
+    case "Bottom":
+      screenCenterX = width / 2;
+      screenCenterY = height - bottomMargin;
+      break;
+    case "Left":
+      screenCenterX = sideMargin;
+      screenCenterY = height / 2;
+      break;
+    case "Right":
+      screenCenterX = width - sideMargin;
+      screenCenterY = height / 2;
+      break;
+    case "Top-Left":
+      screenCenterX = sideMargin;
+      screenCenterY = topMargin;
+      break;
+    case "Top-Right":
+      screenCenterX = width - sideMargin;
+      screenCenterY = topMargin;
+      break;
+    case "Bottom-Left":
+      screenCenterX = sideMargin;
+      screenCenterY = height - bottomMargin;
+      break;
+    case "Bottom-Right":
+      screenCenterX = width - sideMargin;
+      screenCenterY = height - bottomMargin;
+      break;
+    default:
+      // Fallback
+      screenCenterX = width / 2;
+      screenCenterY = height / 2;
+      break;
+  }
+
+  // If one of the custom overrides is present
+  if (customX !== undefined) screenCenterX = customX * width;
+  if (customY !== undefined) screenCenterY = customY * height;
+
+  return { screenCenterX, screenCenterY };
+};
 
 export interface WordMetadata {
   text: string;
@@ -101,7 +199,9 @@ const getWordWeight = (word: string): number => {
     .replace(/[\u064B-\u065F\u0670]/g, "") // Remove Diacritics
     .replace(/[۔!?\.\؟,،:;""''«»\(\)\[\]\{\}]/g, ""); // Remove Punctuation
 
-  let wWeight = WEIGHT_WORD_BASE + cleanWord.length * WEIGHT_CHAR;
+  const isArabicChar = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]/.test(cleanWord);
+  let baseWt = isArabicChar ? WEIGHT_WORD_BASE * 1.5 : WEIGHT_WORD_BASE;
+  let wWeight = baseWt + cleanWord.length * WEIGHT_CHAR * (isArabicChar ? 1.2 : 1.0);
 
   // Punctuation Timing
   if (/[۔؟!.\?]/.test(word)) {
@@ -377,6 +477,10 @@ export const renderNarrationLayer = (
   duration: number,
   cache?: LayoutCache,
 ) => {
+  // Ensure precise coordinate anchoring for word drawing
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+
   // Convert global video time to layer local time (text relative 0.0 to 1.0)
   const currentTotalTime = globalProgress * duration;
   let progress =
@@ -512,7 +616,27 @@ export const renderNarrationLayer = (
     if (blockLines.length > 0) {
       const blockStartY = blockLines[0].y;
       const blockEndY = blockLines[blockLines.length - 1].y;
-      cameraY = (blockStartY + blockEndY) / 2;
+      
+      let baseCameraY = (blockStartY + blockEndY) / 2;
+      
+      // Shift camera to anchor blocks properly on margins without clipping
+      if (
+        layer.positionPreference === "Bottom" ||
+        layer.positionPreference === "Bottom-Left" ||
+        layer.positionPreference === "Bottom-Right"
+      ) {
+        // Shift camera down so text moves up (anchor bottom of block to margin)
+        baseCameraY += (blockEndY - blockStartY) / 2;
+      } else if (
+        layer.positionPreference === "Top" ||
+        layer.positionPreference === "Top-Left" ||
+        layer.positionPreference === "Top-Right"
+      ) {
+        // Shift camera up so text moves down (anchor top of block to margin)
+        baseCameraY -= (blockEndY - blockStartY) / 2;
+      }
+      
+      cameraY = baseCameraY;
     }
   } else {
     // Continuous vertical scroll logic
@@ -551,44 +675,18 @@ export const renderNarrationLayer = (
       layer.positionPreference === "Top" && lineMeta.blockIdx === 0;
     if (lineMeta.isArabic) isStickyHeadline = false; // Pause sticky logic for Arabic isolation
 
-    let screenCenterY = height * 0.5;
-    let screenCenterX = width / 2;
+    const aspectRatioStr = isVertical ? "9:16" : isLandscape ? "16:9" : "1:1";
 
-    if (lineMeta.isArabic) {
-      screenCenterY = height * 0.5;
-      screenCenterX = width / 2;
-    } else if (isStickyHeadline) {
-      screenCenterY = isLandscape ? height * 0.15 : height * 0.2;
-    } else {
-      // Normal Routing
-      let activePos = layer.positionPreference || "Center";
-      if (activePos === "Top") {
-        activePos = "Bottom"; // routed to bottom after first block
-      }
-
-      if (activePos === "Bottom") {
-        screenCenterY = isLandscape ? height * 0.82 : height * 0.75;
-      } else if (activePos === "Bottom-Left" || activePos === "Left") {
-        screenCenterY = isLandscape ? height * 0.82 : height * 0.75;
-        screenCenterX = marginX + textHalfWidth;
-      } else if (activePos === "Bottom-Right" || activePos === "Right") {
-        screenCenterY = isLandscape ? height * 0.82 : height * 0.75;
-        screenCenterX = width - marginX - textHalfWidth;
-      } else if (activePos === "Top-Left") {
-        screenCenterY = marginY + lineHeight * 2;
-        screenCenterX = marginX + textHalfWidth;
-      } else if (activePos === "Top-Right") {
-        screenCenterY = marginY + lineHeight * 2;
-        screenCenterX = width - marginX - textHalfWidth;
-      } else {
-        // "Center"
-        screenCenterY = isVertical ? height * 0.5 : height * 0.6;
-      }
-    }
-
-    // Handle manual drag offsets
-    if (layer.customX !== undefined) screenCenterX = layer.customX * width;
-    if (layer.customY !== undefined) screenCenterY = layer.customY * height;
+    // Resolve Text Position
+    let { screenCenterX, screenCenterY } = resolveTextScreenPosition(
+      width,
+      height,
+      aspectRatioStr,
+      layer.positionPreference || "Center",
+      layer.customX,
+      layer.customY,
+      isStickyHeadline,
+    );
 
     let drawY = screenCenterY + relativeY;
     if (isStickyHeadline) {
@@ -936,9 +1034,9 @@ const drawBackgroundSlideshow = (
         const startX = (width - drawW) / 2;
         const startY = (height - drawH) / 2;
 
-        const amplitude = width * 0.02; // Stronger wave
+        const amplitude = width * 0.04; // Stronger wave
         const frequency = 0.08; // Tighter wave
-        const speed = 3.0; // Faster wave
+        const speed = 5.0; // Faster wave
 
         ctx.save();
         ctx.globalAlpha = 0.8 * opacity; // less transparent
@@ -984,7 +1082,7 @@ const drawBackgroundSlideshow = (
       let animY = 0;
 
       // Resolve RANDOM to a specific animation based on the slide index
-      let activeAnim = bgAnim;
+      let activeAnim: BackgroundAnimation = bgAnim;
       if (activeAnim === BackgroundAnimation.RANDOM) {
         const animOptions: BackgroundAnimation[] = [
           BackgroundAnimation.ZOOM_IN,
@@ -1000,34 +1098,34 @@ const drawBackgroundSlideshow = (
 
       switch (activeAnim) {
         case BackgroundAnimation.ZOOM_IN:
-          animScale = 1.0 + progressForAnim * 0.15; // More cinematic zoom
+          animScale = 1.0 + progressForAnim * 0.40; // High movement zoom in
           break;
         case BackgroundAnimation.ZOOM_OUT:
-          animScale = 1.15 - progressForAnim * 0.15; // Slow zoom out
+          animScale = 1.40 - progressForAnim * 0.40; // High movement zoom out
           break;
         case BackgroundAnimation.CINEMATIC_3D:
-          // Simulate 3D parallax: Dramatic zoom + subtle pan
-          animScale = 1.1 + progressForAnim * 0.25;
+          // Simulate 3D parallax: Dramatic zoom + pan
+          animScale = 1.2 + progressForAnim * 0.40;
           animX =
-            (slideIndex % 2 === 0 ? -1 : 1) * (progressForAnim * width * 0.08);
+            (slideIndex % 2 === 0 ? -1 : 1) * (progressForAnim * width * 0.20);
           animY =
-            (slideIndex % 3 === 0 ? -1 : 1) * (progressForAnim * height * 0.05);
+            (slideIndex % 3 === 0 ? -1 : 1) * (progressForAnim * height * 0.15);
           break;
         case BackgroundAnimation.PAN_LEFT:
-          animScale = 1.25;
-          animX = -(progressForAnim * width * 0.15); // Sweep left
+          animScale = 1.5;
+          animX = -(progressForAnim * width * 0.35); // Big sweep left
           break;
         case BackgroundAnimation.PAN_RIGHT:
-          animScale = 1.25;
-          animX = progressForAnim * width * 0.15 - width * 0.15; // Sweep right
+          animScale = 1.5;
+          animX = progressForAnim * width * 0.35 - width * 0.35; // Big sweep right
           break;
         case BackgroundAnimation.PAN_UP:
-          animScale = 1.25;
-          animY = -(progressForAnim * height * 0.15);
+          animScale = 1.5;
+          animY = -(progressForAnim * height * 0.35); // Big sweep up
           break;
         case BackgroundAnimation.PAN_DOWN:
-          animScale = 1.25;
-          animY = progressForAnim * height * 0.15 - height * 0.15;
+          animScale = 1.5;
+          animY = progressForAnim * height * 0.35 - height * 0.35; // Big sweep down
           break;
       }
 

@@ -138,6 +138,19 @@ export const useVideoEngine = ({
       globalTimeRef.current =
         audioTime % Math.max(0.1, audioDuration) || audioTime;
 
+      // Ensure video background sync
+      if (playbackStatus === "playing") {
+        loadedAssetsRef.current.forEach((asset) => {
+          if (asset instanceof HTMLVideoElement && asset.duration > 0) {
+            const targetTime = globalTimeRef.current % asset.duration;
+            // Seek if video deviates by more than ~200ms
+            if (Math.abs(asset.currentTime - targetTime) > 0.2) {
+              asset.currentTime = targetTime;
+            }
+          }
+        });
+      }
+
       const assetsToDraw = activeBgs
         .filter((bg) => loadedAssetsRef.current.has(bg.id))
         .map((bg) => ({

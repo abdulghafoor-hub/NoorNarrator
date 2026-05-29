@@ -48,6 +48,7 @@ export enum AspectRatio {
 
 export enum BackgroundSource {
   AI = 'AI Generated',
+  STOCK = 'Stock Media',
   CUSTOM = 'Custom Upload'
 }
 
