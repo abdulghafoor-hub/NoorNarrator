@@ -222,7 +222,9 @@ export const generateSEOMetadata = async (
         },
       },
     });
-    return JSON.parse(response.text || "{}") as SEOMetadata;
+    const rawText = response.text || "{}";
+    const cleanJsonString = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanJsonString) as SEOMetadata;
   } catch (e) {
     console.error("SEO generation failed", e);
     return {
@@ -311,7 +313,9 @@ export const generateThumbnailData = async (
       },
     });
 
-    const parsed = JSON.parse(response.text || "{}");
+    const rawText = response.text || "{}";
+    const cleanJsonString = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const parsed = JSON.parse(cleanJsonString);
     return {
       visualPrompt: parsed.visualPrompt || "Cinematic landscape",
       overlayText: parsed.overlayText || "Must Watch",
@@ -357,7 +361,7 @@ For every scene, you must generate a JSON object containing exactly these keys:
 
 ### CRITICAL SYNCHRONIZATION LOGIC:
 - Pacing Match: Limit the "voiceover_text" to what can be naturally spoken within the scene's time window at a calm, deliberate pace (roughly 2 to 2.5 words per second).
-- Text Overlay Alignment: The "onscreen_text" must contain no more than 3 to 5 words. It must align perfectly with the core message being spoken in the "voiceover_text" at that exact second.
+- Text Overlay Alignment: The "onscreen_text" must be exactly 3 to 7 words maximum per scene. Break the text into natural, emotional phrases (e.g., 'مجبوری میں اگر کوئی آپ کو'). Do NOT put full sentences on the screen at once. Keep the pace fast and dynamic like viral poetry Shorts.
 - Image Prompt Specification: When creating the "visual_generation_prompt", use descriptive keyword strings (e.g., "Cinematic macro shot, golden morning sunlight filtering through a window, soft focus, serene atmosphere, 4k, realistic"). Avoid conversational language.
 - Formatting: Do not wrap the JSON output in markdown blocks like \`\`\`json. Return only raw, valid JSON text.
 
@@ -374,7 +378,9 @@ ${topicOrScript}`;
       },
     });
 
-    return JSON.parse(response.text || "[]") as VideoScene[];
+    const rawText = response.text || "[]";
+    const cleanJsonString = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanJsonString) as VideoScene[];
   } catch (e) {
     console.error("Scene generation failed", e);
     return [];

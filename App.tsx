@@ -213,6 +213,21 @@ const App: React.FC = () => {
     thumbnailUrl?: string;
   } | null>(null);
 
+  const lastGeneratedConfig = useRef<{ text: string; voice: string } | null>(null);
+  const currentResultRef = useRef(currentResult);
+  useEffect(() => {
+    currentResultRef.current = currentResult;
+  }, [currentResult]);
+
+  useEffect(() => {
+    const url = currentResult?.audioUrl;
+    return () => {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+    };
+  }, [currentResult?.audioUrl]);
+
   const [layers, setLayers] = useState<EditorLayer[]>([]);
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null);
   const [history, setHistory] = useState<NarrationHistoryItem[]>([]);
@@ -279,20 +294,13 @@ const App: React.FC = () => {
         }
         const arrayBuffer = await response.arrayBuffer();
         if (!audioCtxRef.current)
-          audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
+          audioCtxRef.current = new AudioContext({ sampleRate: 48000 });
         const decoded = await audioCtxRef.current.decodeAudioData(arrayBuffer);
         setBgmBuffer(decoded);
       } catch (e: any) {
         console.error("Failed to load BGM:", e);
         setBgmBuffer(null);
         setBgmError(e.message || "Failed to load audio file");
-        // Clear the URL if it's the old default that might be failing
-        if (
-          settings.bgmUrl ===
-          "https://upload.wikimedia.org/wikipedia/commons/6/61/Descent_-_Ambient_Music.ogg"
-        ) {
-          setSettings((s) => ({ ...s, bgmUrl: "" }));
-        }
       }
     };
     loadBgm();
@@ -337,62 +345,79 @@ const App: React.FC = () => {
     setIsGenerating(true);
     setErrorMsg(null);
     stopSignalRef.current = false;
-    setCurrentResult(null);
+    
+    const isSameConfig = 
+      lastGeneratedConfig.current?.text === settings.text &&
+      lastGeneratedConfig.current?.voice === settings.voice &&
+      currentResultRef.current?.audioBuffer &&
+      currentResultRef.current?.audioUrl;
+
+    if (!isSameConfig) {
+      setCurrentResult(null);
+    }
     stopPreview();
     layoutCache.current.clear(); // Clear cache on new generation
 
     try {
       if (!audioCtxRef.current)
-        audioCtxRef.current = new AudioContext({ sampleRate: 24000 });
+        audioCtxRef.current = new AudioContext({ sampleRate: 48000 });
 
       // Pass user's text down directly without changing it
       const processedScript = settings.text;
 
       const normalizedScript = normalizeText(processedScript);
 
-      // 1. Generate Narration in chunks to prevent voice degradation on long texts
-      const chunks = normalizedScript.match(/[^.!?؟\n]+[.!?؟\n]*/g) || [normalizedScript];
-      let processedChunks: string[] = [];
-      let currentChunk = "";
-      for (const part of chunks) {
-        if ((currentChunk + part).length > 250) {
-          if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
-          currentChunk = part;
-        } else {
-          currentChunk += part;
-        }
-      }
-      if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
-      if (processedChunks.length === 0) processedChunks = [normalizedScript];
-
       let audioData = new Uint8Array(0);
-      for (const chunk of processedChunks) {
-        if (stopSignalRef.current) return;
-        try {
-          const base64Audio = await generateNarration(chunk, settings.voice);
-          const chunkBytes = decode(base64Audio);
-          const newArr = new Uint8Array(audioData.length + chunkBytes.length);
-          newArr.set(audioData);
-          newArr.set(chunkBytes, audioData.length);
-          audioData = newArr;
-        } catch (err) {
-          console.warn("Failed to generate audio for chunk:", chunk, err);
-        }
-      }
+      let audioBuffer: AudioBuffer | undefined = currentResultRef.current?.audioBuffer;
+      let audioUrl: string = currentResultRef.current?.audioUrl || "";
+      let base64Audio: string = currentResultRef.current?.base64Audio || "";
 
-      if (audioData.length === 0) {
-        throw new Error("Failed to generate any audio narration.");
+      if (!isSameConfig) {
+        // 1. Generate Narration in chunks to prevent voice degradation on long texts
+        const chunks = normalizedScript.match(/[^.!?؟\n]+[.!?؟\n]*/g) || [normalizedScript];
+        let processedChunks: string[] = [];
+        let currentChunk = "";
+        for (const part of chunks) {
+          if ((currentChunk + part).length > 250) {
+            if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
+            currentChunk = part;
+          } else {
+            currentChunk += part;
+          }
+        }
+        if (currentChunk.trim()) processedChunks.push(currentChunk.trim());
+        if (processedChunks.length === 0) processedChunks = [normalizedScript];
+
+        for (const chunk of processedChunks) {
+          if (stopSignalRef.current) return;
+          try {
+            const chunkBase64 = await generateNarration(chunk, settings.voice);
+            const chunkBytes = decode(chunkBase64);
+            const newArr = new Uint8Array(audioData.length + chunkBytes.length);
+            newArr.set(audioData);
+            newArr.set(chunkBytes, audioData.length);
+            audioData = newArr;
+          } catch (err) {
+            console.warn("Failed to generate audio for chunk:", chunk, err);
+          }
+        }
+
+        if (audioData.length === 0) {
+          throw new Error("Failed to generate any audio narration.");
+        }
+        audioBuffer = await decodeAudioData(
+          audioData,
+          audioCtxRef.current,
+          24000,
+          1,
+        );
+        const wavData = encodeAudioBufferToWav(audioBuffer);
+        audioUrl = URL.createObjectURL(
+          new Blob([wavData], { type: "audio/wav" }),
+        );
+        base64Audio = encode(audioData);
+        lastGeneratedConfig.current = { text: settings.text, voice: settings.voice };
       }
-      const audioBuffer = await decodeAudioData(
-        audioData,
-        audioCtxRef.current,
-        24000,
-        1,
-      );
-      const wavData = encodeAudioBufferToWav(audioBuffer);
-      const audioUrl = URL.createObjectURL(
-        new Blob([wavData], { type: "audio/wav" }),
-      );
 
       // 2. Dynamic Visual Prompt
       const dynamicPrompt = await generateVisualPrompt(normalizedScript);
@@ -452,7 +477,7 @@ const App: React.FC = () => {
         const stockAssets = await fetchMultipleFallbackMedia(dynamicPrompt, settings.aspectRatio, 3);
         stockAssets.forEach((asset, i) => {
           newBgs.push({
-            id: Date.now().toString() + "-stock-" + i,
+            id: crypto.randomUUID(),
             url: asset.srcUrl,
             source: BackgroundSource.STOCK,
             type: asset.type === "video" ? "video" : "image"
@@ -463,7 +488,7 @@ const App: React.FC = () => {
         bgUrls.forEach((bgUrl, index) => {
           if (bgUrl) {
             newBgs.push({
-              id: Date.now().toString() + index,
+              id: crypto.randomUUID(),
               url: bgUrl,
               source: BackgroundSource.AI,
               type: "image",
@@ -506,7 +531,6 @@ const App: React.FC = () => {
       }
 
       if (stopSignalRef.current) return;
-      const base64Audio = encode(audioData);
       setCurrentResult({
         audioUrl,
         audioBuffer,
@@ -517,7 +541,7 @@ const App: React.FC = () => {
 
       setHistory((prev) => [
         {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           text: settings.text,
           voice: settings.voice,
           timestamp: Date.now(),
@@ -585,7 +609,7 @@ const App: React.FC = () => {
         if (stockAssets.length > 0) {
           const asset = stockAssets[0];
           const newBg: BackgroundAsset = {
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
             url: asset.srcUrl,
             source: BackgroundSource.STOCK,
             type: asset.type === "video" ? "video" : "image",
@@ -604,7 +628,7 @@ const App: React.FC = () => {
         );
         if (imageUrl) {
           const newBg: BackgroundAsset = {
-            id: Date.now().toString(),
+            id: crypto.randomUUID(),
             url: imageUrl,
             source: BackgroundSource.AI,
             type: "image",
@@ -630,7 +654,7 @@ const App: React.FC = () => {
       reader.onload = (event) => {
         const url = event.target?.result as string;
         const newBg: BackgroundAsset = {
-          id: Date.now().toString(),
+          id: crypto.randomUUID(),
           url,
           source: BackgroundSource.CUSTOM,
           type: file.type.startsWith("video") ? "video" : "image",
@@ -752,7 +776,14 @@ const App: React.FC = () => {
       const layer = prev[layerIdx];
       if (time <= layer.startTime || time >= layer.endTime) return prev; // Cannot split outside bounds
 
-      const newLayer = { ...layer, id: Date.now().toString(), startTime: time };
+      const newLayer = { 
+        ...layer, 
+        id: crypto.randomUUID(), 
+        startTime: time,
+        trimStart: layer.type === LayerType.VIDEO || layer.type === LayerType.IMAGE 
+          ? ((layer as any).trimStart || 0) + (time - layer.startTime) 
+          : undefined
+      };
       const updatedLayer = { ...layer, endTime: time };
 
       const nextLayers = [...prev];
@@ -1381,7 +1412,11 @@ const App: React.FC = () => {
                             zIndex: 1,
                             text: settings.text,
                             animationType: AnimationType.VERTICAL_SCROLL,
-                            positionPreference: TextPosition.BOTTOM,
+                            positionPreference: TextPosition.CUSTOM,
+                            customX: 0.5,
+                            customY: 0.5,
+                            fontSize: 100,
+                            color: "#FFFFFF"
                           },
                           {
                             id: "brand-watermark",
@@ -1442,7 +1477,11 @@ const App: React.FC = () => {
                             zIndex: 1,
                             text: settings.text,
                             animationType: AnimationType.LEFT_TO_RIGHT,
-                            positionPreference: TextPosition.LEFT,
+                            positionPreference: TextPosition.CUSTOM,
+                            customX: 0.5,
+                            customY: 0.5,
+                            fontSize: 80,
+                            color: "#FFFFFF"
                           },
                           {
                             id: "brand-watermark",

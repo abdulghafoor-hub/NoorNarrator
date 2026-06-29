@@ -49,6 +49,8 @@ export const useVideoEngine = ({
   const [playbackStatus, setPlaybackStatus] = useState<
     "playing" | "paused" | "stopped"
   >("stopped");
+  
+  const [scrubTrigger, setScrubTrigger] = useState(0);
 
   // Immutable State Refs for lock-free 60fps rendering
   const stateRefs = useRef({ settings, layers, activeBgs });
@@ -170,12 +172,19 @@ export const useVideoEngine = ({
         loadedAssetsRef.current,
       );
 
-      rafRef.current = requestAnimationFrame(draw);
+      if (playbackStatus === "playing") {
+        rafRef.current = requestAnimationFrame(draw);
+      }
     };
 
-    rafRef.current = requestAnimationFrame(draw);
+    if (playbackStatus === "playing") {
+      rafRef.current = requestAnimationFrame(draw);
+    } else {
+      // Draw once to update frame when paused
+      rafRef.current = requestAnimationFrame(draw);
+    }
     return () => cancelAnimationFrame(rafRef.current);
-  }, [playbackStatus, audioDuration, canvasRef]);
+  }, [playbackStatus, audioDuration, canvasRef, layers, settings, scrubTrigger]);
 
   // AUDIO CONTROLS
   const playPreview = useCallback(async () => {
@@ -273,6 +282,7 @@ export const useVideoEngine = ({
           asset.currentTime = time % asset.duration;
         }
       });
+      setScrubTrigger(t => t + 1);
     },
     [playbackStatus],
   );

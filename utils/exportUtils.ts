@@ -87,7 +87,21 @@ export const exportDeterministicVideo = async (
   let audioEncoder: any = null;
   let audioError: any = null;
 
+  let finalAudioBuffer = audioBuffer;
   if (audioBuffer) {
+    const offlineCtx = new OfflineAudioContext(
+      2,
+      audioBuffer.duration * 48000,
+      48000
+    );
+    const source = offlineCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(offlineCtx.destination);
+    source.start();
+    finalAudioBuffer = await offlineCtx.startRendering();
+  }
+
+  if (finalAudioBuffer) {
     audioEncoder = new window.AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta as any),
       error: (e) => {
@@ -98,8 +112,8 @@ export const exportDeterministicVideo = async (
 
     const audioConfig: AudioEncoderConfig = {
       codec: "mp4a.40.2",
-      sampleRate: audioBuffer.sampleRate,
-      numberOfChannels: audioBuffer.numberOfChannels,
+      sampleRate: 48000,
+      numberOfChannels: 2,
       bitrate: 128_000,
     };
 
@@ -114,9 +128,9 @@ export const exportDeterministicVideo = async (
 
   // Audio state
   let audioOffset = 0;
-  const sampleRate = audioBuffer ? audioBuffer.sampleRate : 48000;
-  const channels = audioBuffer ? audioBuffer.numberOfChannels : 2;
-  const length = audioBuffer ? audioBuffer.length : 0;
+  const sampleRate = finalAudioBuffer ? finalAudioBuffer.sampleRate : 48000;
+  const channels = finalAudioBuffer ? finalAudioBuffer.numberOfChannels : 2;
+  const length = finalAudioBuffer ? finalAudioBuffer.length : 0;
   
   // Use exactly 1 second of frames per chunk so timestamp calculations 
   // produce perfectly round integers to avoid AAC WebCodecs bugs
@@ -129,7 +143,7 @@ export const exportDeterministicVideo = async (
     const time = i / fps;
 
     // 1. Encode Audio up to this time
-    if (audioEncoder && audioBuffer) {
+    if (audioEncoder && finalAudioBuffer) {
       while (
         audioOffset < length &&
         audioOffset / sampleRate <= time + 1 / fps
@@ -149,7 +163,7 @@ export const exportDeterministicVideo = async (
 
         const f32Arrays = [];
         for (let c = 0; c < channels; c++) {
-          f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
+          f32Arrays.push(finalAudioBuffer.getChannelData(c).slice(audioOffset, end));
         }
 
         const combined = new Float32Array(actualFrames * channels);
