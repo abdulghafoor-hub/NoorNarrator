@@ -286,7 +286,7 @@ export const generateThumbnailData = async (
          IMAGERY: For topics like "Gunahe Jaria" (ongoing sin), visualize a person in a dark setting using a phone (source of sin) contrasted with an image of a grave being reached by "dark rays" of ongoing sin. Keep it mysterious, dramatic, and suspenseful.
          KEYWORDS: "Dramatic lighting, cinematic, emotional impact, high contrast, professional Islamic art style".
          CRITICAL: ABSOLUTELY NO women, females, or girls in the image. No text in description. The top 20% of the image MUST be relatively clean/empty to leave room for text. KEEP the main subject dead-center to ensure safe cropping across all 9:16 and 16:9 screen formats.
-      2. 'overlayText': A punchy 1 to 2 line hook text (about 3-6 words) to write ON TOP of the image. It MUST be written strictly in the Urdu language (Urdu script). It MUST use extreme psychological curiosity gaps (e.g., "The hidden truth...", "Why everyone is wrong...", "Never ignore this..."). 
+      2. 'overlayText': Generate overlayText for the thumbnail. It MUST be under 5 words. Use curiosity gaps (e.g., 'Do this every morning!', 'اٹھتے ہی یہ کام کریں'). If there is a list, include the number (e.g., '3 Sunnahs').
       3. 'styleCategory': The style of the video: 'Educational', 'Storytelling', 'Tech', or 'Religious Urdu'.
       4. 'colorPop': A hex color code for the most striking highlight color (e.g., '#fbbf24' for gold, '#ef4444' for red, '#06b6d4' for cyan).
       `,

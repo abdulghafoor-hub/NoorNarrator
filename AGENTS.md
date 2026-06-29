@@ -15,3 +15,9 @@ When generating or modifying code for this application, ensure the following rul
 3. **Text Overlay and Animation**:
    - Draw text word-by-word to allow individual word highlighting, but ensure `ctx.textAlign = 'center'` and `ctx.textBaseline = 'middle'` are used with precise `x, y` coordinates.
    - Use a fallback font stack that supports Urdu (e.g., `"Jameel Noori Nastaleeq", "Noto Nastaliq Urdu", "Amiri", "Gulzar"`).
+
+4. **Media and Image Sourcing (Islamic Content Guidelines)**:
+   - When using Pixabay or Pexels for media asset selection or image generation, you MUST strictly avoid fetching or displaying images/videos containing women, females, explicit content, or provocative/adult imagery.
+   - Append negative keywords like `-woman -girl -female -sexy -adult -bikini -model -face -portrait` to the search parameters.
+   - Ensure the internal regex cleanly filters out all search results containing tags related to women or models.
+   - For backend AI image generation prompts, explicitly instruct the model: "ABSOLUTELY NO women, females, girls, provocative attire, or human faces in the image."

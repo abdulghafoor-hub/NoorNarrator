@@ -11,10 +11,22 @@ export const exportDeterministicVideo = async (
   onProgress: (progress: number) => void,
 ): Promise<Blob> => {
   let audioBuffer = rawAudioBuffer;
+
+  // 1. Fully Sanitize and Prep Audio Buffer (The fix for Speed/Encoding Errors)
   if (audioBuffer) {
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+      const data = audioBuffer.getChannelData(c);
+      for (let i = 0; i < data.length; i++) {
+        let val = data[i];
+        if (!Number.isFinite(val)) data[i] = 0;
+        else if (val > 1.0) data[i] = 1.0;
+        else if (val < -1.0) data[i] = -1.0;
+      }
+    }
+
     const targetSampleRate = 48000;
-    const targetChannels = 2; // AAC encoder compatibility
-    const offlineCtx = new OfflineAudioContext(
+    const targetChannels = 2; 
+    const offlineCtx = new window.OfflineAudioContext(
       targetChannels,
       Math.ceil(audioBuffer.length * (targetSampleRate / audioBuffer.sampleRate)),
       targetSampleRate
@@ -67,7 +79,6 @@ export const exportDeterministicVideo = async (
 
   const videoSupport = await window.VideoEncoder.isConfigSupported(videoConfig);
   if (!videoSupport.supported) {
-    console.warn("avc1.4d002a not supported, falling back to baseline avc1.42E028");
     videoConfig.codec = "avc1.42E028";
   }
 
@@ -94,9 +105,7 @@ export const exportDeterministicVideo = async (
 
     const audioSupport = await window.AudioEncoder.isConfigSupported(audioConfig);
     if (!audioSupport.supported) {
-      console.warn("mp4a.40.2 not supported, falling back to codec mp4a.67 or adjusting bitrate");
-      // Fallback or leave it as throws, but let's try configuring anyways or fallback to an allowed profile like mp4a.40.5
-      audioConfig.codec = "mp4a.40.5"; // HE-AAC
+      audioConfig.codec = "mp4a.40.5"; 
     }
     audioEncoder.configure(audioConfig);
   }
@@ -108,7 +117,10 @@ export const exportDeterministicVideo = async (
   const sampleRate = audioBuffer ? audioBuffer.sampleRate : 48000;
   const channels = audioBuffer ? audioBuffer.numberOfChannels : 2;
   const length = audioBuffer ? audioBuffer.length : 0;
-  const CHUNK_FRAMES = 1024; // AAC frames are 1024 samples long. Use exact chunks to prevent Encoding error.
+  
+  // Use exactly 1 second of frames per chunk so timestamp calculations 
+  // produce perfectly round integers to avoid AAC WebCodecs bugs
+  const CHUNK_FRAMES = sampleRate; 
 
   for (let i = 0; i < totalFrames; i++) {
     if (videoError) throw videoError;
@@ -126,8 +138,10 @@ export const exportDeterministicVideo = async (
           throw new Error(`Audio Encoder is closed: ${audioError?.message || "Unknown error"}`);
         }
 
-        if (audioEncoder.encodeQueueSize > 50) {
-          await new Promise((r) => setTimeout(r, 0));
+        // Backpressure validation
+        while (audioEncoder.encodeQueueSize > 50) {
+          await new Promise((r) => setTimeout(r, 10));
+          if (audioError) throw audioError;
         }
 
         const end = Math.min(audioOffset + CHUNK_FRAMES, length);
@@ -137,6 +151,7 @@ export const exportDeterministicVideo = async (
         for (let c = 0; c < channels; c++) {
           f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
         }
+
         const combined = new Float32Array(actualFrames * channels);
         for(let c = 0; c < channels; c++) {
           combined.set(f32Arrays[c], c * actualFrames);
@@ -147,7 +162,7 @@ export const exportDeterministicVideo = async (
           sampleRate,
           numberOfFrames: actualFrames,
           numberOfChannels: channels,
-          timestamp: Math.round((audioOffset * 1_000_000) / sampleRate),
+          timestamp: Math.round((audioOffset / sampleRate) * 1_000_000),
           data: combined,
         });
 
@@ -162,8 +177,9 @@ export const exportDeterministicVideo = async (
       throw new Error(`Video Encoder is closed: ${videoError?.message || "Unknown error"}`);
     }
 
-    if (videoEncoder.encodeQueueSize > 30) {
-      await new Promise((r) => setTimeout(r, 10)); // let queue drain
+    while (videoEncoder.encodeQueueSize > 30) {
+      await new Promise((r) => setTimeout(r, 10)); 
+      if (videoError) throw videoError;
     }
 
     drawFrame(time);
@@ -178,14 +194,19 @@ export const exportDeterministicVideo = async (
 
     if (i % 5 === 0) {
       onProgress(i / totalFrames);
-      await new Promise((r) => setTimeout(r, 0)); // yield to UI
+      await new Promise((r) => setTimeout(r, 0)); // yield
     }
   }
 
-  // Final drain for remaining audio
+  // 3. Final Drain for remaining audio
   if (audioEncoder && audioBuffer && audioOffset < length) {
     while (audioOffset < length) {
       if (audioError) throw audioError;
+
+      while (audioEncoder.encodeQueueSize > 50) {
+        await new Promise((r) => setTimeout(r, 10));
+        if (audioError) throw audioError;
+      }
 
       const end = Math.min(audioOffset + CHUNK_FRAMES, length);
       const actualFrames = end - audioOffset;
@@ -194,6 +215,7 @@ export const exportDeterministicVideo = async (
       for (let c = 0; c < channels; c++) {
         f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
       }
+
       const combined = new Float32Array(actualFrames * channels);
       for(let c = 0; c < channels; c++) {
         combined.set(f32Arrays[c], c * actualFrames);
@@ -204,7 +226,7 @@ export const exportDeterministicVideo = async (
         sampleRate,
         numberOfFrames: actualFrames,
         numberOfChannels: channels,
-        timestamp: Math.round((audioOffset * 1_000_000) / sampleRate),
+        timestamp: Math.round((audioOffset / sampleRate) * 1_000_000),
         data: combined,
       });
 

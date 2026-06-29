@@ -11,6 +11,8 @@ export enum AnimationType {
   VERTICAL_SCROLL = 'Vertical Scroll',
   LEFT_TO_RIGHT = 'Left to Right',
   RIGHT_TO_LEFT = 'Right to Left',
+  PAGE_SLIDING = 'Page Sliding',
+  PAGE_SCROLLING = 'Page Scrolling',
 }
 
 export enum BackgroundAnimation {

@@ -585,6 +585,8 @@ export const renderNarrationLayer = (
       layer.animationType === AnimationType.RIGHT_TO_LEFT);
   const isVerticalScroll =
     !isArabicBlock && layer.animationType === AnimationType.VERTICAL_SCROLL;
+  const isPageSliding = !isArabicBlock && layer.animationType === AnimationType.PAGE_SLIDING;
+  const isPageScrolling = !isArabicBlock && layer.animationType === AnimationType.PAGE_SCROLLING;
 
   // Horizontal motion handling
   if (isHorizontalAnim) {
@@ -699,7 +701,7 @@ export const renderNarrationLayer = (
     // Focus mode / Arabic Isolation / horizontal anim: completely hide other blocks
     if (
       !isStickyHeadline &&
-      (isFocusMode || isHorizontalAnim || lineMeta.isArabic || isArabicBlock) &&
+      (isFocusMode || isHorizontalAnim || isPageSliding || isPageScrolling || lineMeta.isArabic || isArabicBlock) &&
       lineMeta.blockIdx !== activeBlockIdx
     ) {
       return;
@@ -710,13 +712,15 @@ export const renderNarrationLayer = (
       isStickyHeadline ||
       isFocusMode ||
       isHorizontalAnim ||
+      isPageSliding ||
+      isPageScrolling ||
       lineMeta.isArabic
     )
       distRatio = 0;
 
     const focusFactor = Math.max(0, 1 - distRatio);
     let scale =
-      (isFocusMode || isHorizontalAnim) && !isStickyHeadline
+      (isFocusMode || isHorizontalAnim || isPageSliding || isPageScrolling) && !isStickyHeadline
         ? 1.1
         : 0.85 + 0.15 * focusFactor;
 
@@ -731,29 +735,48 @@ export const renderNarrationLayer = (
       opacity = 0.9;
     }
 
-    // Slide-in/Fade-out for Focus Mode & Horizontal Anim
-    if (!isStickyHeadline && (isFocusMode || isHorizontalAnim)) {
+    let offsetX = 0;
+    let offsetY = 0;
+
+    // Slide-in/Fade-out for Focus Mode & Horizontal Anim & Page Sliding
+    if (!isStickyHeadline && (isFocusMode || isHorizontalAnim || isPageSliding || isPageScrolling)) {
       const blockLines = lines.filter((l) => l.blockIdx === activeBlockIdx);
       const blockStartT = words[blockLines[0].wordIndices[0]].start;
       const lastLineIndices = blockLines[blockLines.length - 1].wordIndices;
       const blockEndT = words[lastLineIndices[lastLineIndices.length - 1]].end;
       const blockDur = blockEndT - blockStartT;
 
+      const transitionDur = Math.min(0.2, blockDur * 0.2); // max 200ms or 20%
       const slideInP = Math.min(
         1,
-        Math.max(0, (progress - blockStartT) / Math.min(0.05, blockDur * 0.2)),
-      ); // 5% of video or 20% of block fade in
-
+        Math.max(0, (progress - blockStartT) / transitionDur),
+      );
       const slideOutP = Math.min(
         1,
-        Math.max(0, (blockEndT - progress) / Math.min(0.05, blockDur * 0.2)),
-      ); // 5% of video or 20% of block fade out
+        Math.max(0, (blockEndT - progress) / transitionDur),
+      );
 
+      // Fading
       opacity *= slideInP * slideOutP;
+
+      // Page Sliding (Like quotes) - slides in from right, out to left
+      if (isPageSliding) {
+        // Apply ease-out for slide in, ease-in for slide out
+        const easeInOff = (1 - slideInP);
+        const easeOutOff = (1 - slideOutP);
+        offsetX = (width * 1.2 * easeInOff * easeInOff) - (width * 1.2 * easeOutOff * easeOutOff);
+      }
+      
+      // Page Scrolling - scrolls in from bottom, out to top
+      if (isPageScrolling) {
+        const easeInOff = (1 - slideInP);
+        const easeOutOff = (1 - slideOutP);
+        offsetY = (height * 1.2 * easeInOff * easeInOff) - (height * 1.2 * easeOutOff * easeOutOff);
+      }
     }
 
     ctx.save();
-    ctx.translate(screenCenterX + cameraX, drawY);
+    ctx.translate(screenCenterX + cameraX + offsetX, drawY + offsetY);
     ctx.scale(scale, scale);
 
     lineMeta.wordIndices.forEach((wIdx) => {
@@ -1298,110 +1321,57 @@ export const createCompositeThumbnail = async (
     img.onerror = () => resolve(false);
   });
 
+  // 1. Draw High-Res Background Image
   const scale = Math.max(canvas.width / img.width, canvas.height / img.height);
   const x = canvas.width / 2 - (img.width / 2) * scale;
   const y = canvas.height / 2 - (img.height / 2) * scale;
   ctx.drawImage(img, x, y, img.width * scale, img.height * scale);
 
-  const isTech = styleCategory.toLowerCase().includes("tech");
-  const isStory = styleCategory.toLowerCase().includes("storytelling");
-  const isRelig =
-    styleCategory.toLowerCase().includes("religious") ||
-    styleCategory.toLowerCase().includes("urdu");
+  // 2. THE "PHOTOSHOP" CINEMATIC VIGNETTE
+  // This darkens the edges so the center pops and text is 100% legible
+  const isLandscape = canvas.width > canvas.height;
+  
+  const radial = ctx.createRadialGradient(
+    canvas.width / 2, canvas.height / 2, canvas.height * 0.1,
+    canvas.width / 2, canvas.height / 2, canvas.width * 0.9
+  );
+  radial.addColorStop(0, "rgba(0,0,0,0)");
+  radial.addColorStop(1, "rgba(2,6,23,0.85)"); // Deep cinematic navy/black
+  ctx.fillStyle = radial;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Vignette / Gradient based on style
-  if (isTech) {
-    // Tech: Neon glow edge
-    const grad = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-    grad.addColorStop(0, "rgba(0,0,0,0.8)");
-    grad.addColorStop(0.5, "rgba(0,0,0,0.4)");
-    grad.addColorStop(1, "rgba(0,0,0,0.8)");
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Top gradient specifically to make the Text stand out
+  const topGrad = ctx.createLinearGradient(0, 0, 0, canvas.height * 0.5);
+  topGrad.addColorStop(0, "rgba(0,0,0,0.95)");
+  topGrad.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = topGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.strokeStyle = colorPop;
-    ctx.lineWidth = 15;
-    ctx.shadowColor = colorPop;
-    ctx.shadowBlur = 50;
-    ctx.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
-    ctx.shadowBlur = 0;
-  } else if (isStory) {
-    // Story: Heavy vignette
-    const radial = ctx.createRadialGradient(
-      canvas.width / 2,
-      canvas.height / 2,
-      canvas.height * 0.2,
-      canvas.width / 2,
-      canvas.height / 2,
-      canvas.width * 0.8,
-    );
-    radial.addColorStop(0, "rgba(0,0,0,0)");
-    radial.addColorStop(1, "rgba(0,0,0,0.85)");
-    ctx.fillStyle = radial;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-  } else {
-    // Brand Kit Guidelines: Deep Navy Fade
-    const isLandscape = canvas.width > canvas.height;
-
-    if (isLandscape) {
-      // Landscape: Darker on the right for text
-      const rightGrad = ctx.createLinearGradient(
-        canvas.width * 0.4,
-        0,
-        canvas.width,
-        0,
-      );
-      rightGrad.addColorStop(0, "rgba(8, 20, 32, 0)"); // Deep Navy
-      rightGrad.addColorStop(1, "rgba(8, 20, 32, 0.95)");
-      ctx.fillStyle = rightGrad;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    } else {
-      // Vertical: Darker on the top for text
-      const topGrad = ctx.createLinearGradient(0, canvas.height * 0.4, 0, 0);
-      topGrad.addColorStop(0, "rgba(8, 20, 32, 0)");
-      topGrad.addColorStop(1, "rgba(8, 20, 32, 0.95)");
-      ctx.fillStyle = topGrad;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      // Also a slight dark fade at bottom for watermark
-      const bottomGrad = ctx.createLinearGradient(
-        0,
-        canvas.height * 0.8,
-        0,
-        canvas.height,
-      );
-      bottomGrad.addColorStop(0, "rgba(8, 20, 32, 0)");
-      bottomGrad.addColorStop(1, "rgba(8, 20, 32, 0.8)");
-      ctx.fillStyle = bottomGrad;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-
-  // Draw overlay text
+  // 3. HIGH-CTR TEXT RENDERING (The MrBeast / Viral Style)
   if (overlayText) {
-    const isLandscape = canvas.width > canvas.height;
-    const scaleRef = isLandscape ? canvas.height * 1.45 : canvas.width;
-    const fontSize = Math.floor(scaleRef * 0.12);
+    const cleanText = overlayText.trim();
+    // Detect if text contains Urdu/Arabic characters
+    const isUrdu = /[\u0600-\u06FF]/.test(cleanText);
 
-    // Choose font stack based on style
-    let fontStack = `"Inter", sans-serif`;
-    if (isRelig || isRTL(overlayText)) {
-      fontStack = `"Jameel Noori Nastaleeq", "Noto Nastaliq Urdu", "Amiri", "Gulzar", "Inter", sans-serif`;
-    }
+    // Massive Font Scaling (Thumbnails need HUGE text)
+    const scaleRef = isLandscape ? canvas.height : canvas.width;
+    let fontSize = Math.floor(scaleRef * (isUrdu ? 0.22 : 0.18));
+
+    const fontStack = isUrdu
+      ? `"Jameel Noori Nastaleeq", "Noto Nastaliq Urdu", "Amiri", sans-serif`
+      : `"Montserrat Extra Bold", "The Bold Font", sans-serif`;
 
     ctx.font = `900 ${fontSize}px ${fontStack}`;
-
-    // Positional alignments
-    let textAlign = isLandscape && (isRelig || !isTech) ? "right" : "center";
-    ctx.textAlign = textAlign as CanvasTextAlign;
+    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.direction = "rtl";
+    ctx.direction = isUrdu ? "rtl" : "ltr";
 
-    const words = overlayText.split(" ");
-    let lines: string[] = [];
+    // Smart Word Wrapping (Force max 2-3 lines)
+    const words = cleanText.split(" ");
+    const lines: string[] = [];
     let currentLine = words[0] || "";
+    const maxWidth = canvas.width * 0.90;
 
-    const maxWidth = isLandscape ? canvas.width * 0.5 : canvas.width * 0.88;
     for (let i = 1; i < words.length; i++) {
       const word = words[i];
       const width = ctx.measureText(currentLine + " " + word).width;
@@ -1414,84 +1384,57 @@ export const createCompositeThumbnail = async (
     }
     if (currentLine) lines.push(currentLine);
 
-    const lineHeight = fontSize * 1.6;
-    let startY = 0;
+    // Dynamic Line Height based on language
+    const lineHeight = fontSize * (isUrdu ? 1.6 : 1.2);
+    
+    // Position at Top Center (Avoids YouTube bottom-right timestamp block)
+    const startY = (canvas.height * 0.15) + (fontSize / 2);
 
-    if (isLandscape && (isRelig || !isTech)) {
-      // Center vertically on the right
-      const totalHeight = lines.length * lineHeight;
-      startY = canvas.height / 2 - totalHeight / 2 + fontSize / 2;
-    } else if (!isLandscape && (isRelig || !isTech)) {
-      // Top alignment for vertical reels
-      startY = canvas.height * 0.15 + fontSize / 2;
-    } else {
-      startY = canvas.height * (isLandscape ? 0.18 : 0.12) + fontSize / 2;
-    }
-
-    lines.forEach((line, i) => {
-      const lineY = startY + i * lineHeight;
-      const textWidth = ctx.measureText(line).width;
-
-      let drawX = canvas.width / 2;
-      if (ctx.textAlign === "right") {
-        drawX = canvas.width * 0.92;
-      }
+    lines.forEach((line, index) => {
+      const lineY = startY + index * lineHeight;
+      const drawX = canvas.width / 2;
 
       ctx.save();
+      ctx.lineJoin = "round";
+      ctx.miterLimit = 2;
 
-      if (isTech) {
-        // Neon text
-        ctx.shadowBlur = 30;
-        ctx.shadowColor = colorPop;
-        ctx.fillStyle = "#ffffff";
-        ctx.fillText(line, drawX, lineY);
+      // Layer A: Deep Heavy Drop Shadow for Depth
+      ctx.shadowColor = "rgba(0,0,0,0.95)";
+      ctx.shadowBlur = 30;
+      ctx.shadowOffsetY = 15;
+      
+      // Layer B: Thick Black Stroke for readability against any background
+      ctx.lineWidth = fontSize * 0.15;
+      ctx.strokeStyle = "#000000";
+      ctx.strokeText(line, drawX, lineY);
 
-        // Core
-        ctx.shadowBlur = 0;
-        ctx.lineWidth = fontSize * 0.05;
-        ctx.strokeStyle = "#000000";
-        ctx.strokeText(line, drawX, lineY);
-      } else if (isStory) {
-        // Intense drop shadow, huge impact, no box
-        ctx.shadowColor = "rgba(0,0,0,0.9)";
-        ctx.shadowBlur = 20;
-        ctx.shadowOffsetY = 15;
-        ctx.fillStyle = colorPop;
-        if (i % 2 === 0) ctx.fillStyle = "#ffffff"; // alternate colors
+      // Layer C: Smart Fill Color
+      // High CTR trick: If a line contains a number (like "۳" or "3"), paint it GOLD!
+      const hasNumber = /[0-9۳-۹]/.test(line);
+      const isHighlightLine = hasNumber || (lines.length > 1 && index === 0);
 
-        ctx.lineWidth = fontSize * 0.1;
-        ctx.strokeStyle = "#000000";
-        ctx.strokeText(line, drawX, lineY);
-        ctx.fillText(line, drawX, lineY);
+      if (isHighlightLine) {
+        const goldGrad = ctx.createLinearGradient(0, lineY - fontSize/2, 0, lineY + fontSize/2);
+        goldGrad.addColorStop(0, "#FFF5C0"); // Bright inner gold
+        goldGrad.addColorStop(1, "#FFD700"); // Deep Gold outer
+        ctx.fillStyle = goldGrad;
       } else {
-        // Brand Kit: Islamic Wisdom Style
-        const isGold = i % 2 !== 0; // Alternate sizes/colors
-
-        ctx.fillStyle = isGold ? "#FFD700" : "#FFFFFF";
-
-        ctx.shadowColor = isGold ? "rgba(255, 215, 0, 0.3)" : "rgba(0,0,0,0.7)";
-        ctx.shadowBlur = isGold ? 20 : 15;
-        ctx.shadowOffsetY = 8;
-
-        ctx.lineWidth = fontSize * 0.08;
-        ctx.strokeStyle = "#020617"; // Very dark navy/black
-        ctx.strokeText(line, drawX, lineY);
-        ctx.fillText(line, drawX, lineY);
+        ctx.fillStyle = "#FFFFFF"; // Pure White
       }
+
+      ctx.fillText(line, drawX, lineY);
       ctx.restore();
     });
   }
 
-  const brandSize = Math.max(16, canvas.width * 0.03);
-  ctx.font = `bold ${brandSize}px "Inter", sans-serif`;
-  ctx.fillStyle = "rgba(255,255,255,0.7)";
+  // 4. Subtle Brand Watermark (Bottom Center)
+  const brandSize = Math.max(16, canvas.width * 0.025);
+  ctx.font = `bold ${brandSize}px "Montserrat", sans-serif`;
+  ctx.fillStyle = "rgba(255,255,255,0.5)";
   ctx.shadowBlur = 0;
-  ctx.textAlign = "right";
-  ctx.fillText(
-    "LifeBeauty • Islamic Wisdom",
-    canvas.width - brandSize * 1.5,
-    brandSize * 2.5,
-  );
+  ctx.textAlign = "center";
+  ctx.fillText("LifeBeauty Studio", canvas.width / 2, canvas.height * 0.92);
 
-  return canvas.toDataURL("image/png", 0.9);
+  // Return as high-quality JPEG (Smaller file size, perfect for YouTube uploads)
+  return canvas.toDataURL("image/jpeg", 0.95); 
 };

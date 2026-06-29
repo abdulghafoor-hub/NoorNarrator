@@ -26,21 +26,19 @@ export const extractSearchKeywords = (prompt: string): string => {
     // might still match them if we don't explicitly negate. 
     // We will just filter them out from our query so we don't explicitly search for them.
     "woman", "girl", "female", "lady", "sexy", "hot", "adult", "bikini", 
-    "model", "face", "portrait", "eyes", "lips", "body"
+    "model", "face", "portrait", "eyes", "lips", "body", "man", "boy", 
+    "human", "person", "people", "couple", "fashion", "dance"
   ];
 
   let words = prompt
     .toLowerCase()
     .replace(/[^\w\s]/g, "")
     .split(/\s+/);
+  
+  // Filter out stop words and explicitly filter out forbidden words
   words = words.filter((word) => word.length > 2 && !stopWords.includes(word));
 
-  // We append safe, abstract/nature/architectural keywords to steer the algorithm
-  // towards safe imagery suitable for islamic content if it's struggling.
-  // Actually, appending "islamic architecture nature modest" to EVERY query might ruin specific queries like "desert at night".
-  // Let's just return the sanitized keywords, but we'll add " -woman -girl -female" at the end if the API supports it, though for Pexels/Pixabay, appending safe context helps.
-  
-  // Return the first 3-4 significant words
+  // Limit to core keywords, no human-related
   let query = words.slice(0, 4).join(" ");
   
   return query;
@@ -69,12 +67,13 @@ export const searchPexelsVideo = async (
     }];
   }
 
-  // Ensure query leans safe 
-  const safeQuery = query + " nature architecture light modest -woman -girl -female -sexy -adult -bikini -model -face";
+  // Pexels DOES NOT support negative (-) keywords. Adding "-woman" will actually search FOR "woman"!
+  // So we ONLY append safe, abstract positive keywords here.
+  const pexelsSafeQuery = query + " nature landscape architecture macro sky";
 
   // pexels orientation: landscape, portrait or square
   const res = await fetch(
-    `https://api.pexels.com/videos/search?query=${encodeURIComponent(safeQuery)}&orientation=${orientation}&per_page=15`,
+    `https://api.pexels.com/videos/search?query=${encodeURIComponent(pexelsSafeQuery)}&orientation=${orientation}&per_page=40`,
     {
       headers: { Authorization: PEXELS_API_KEY },
     },
@@ -84,7 +83,7 @@ export const searchPexelsVideo = async (
     throw new Error(`Pexels API Error: ${res.status}`);
   }
   const data = await res.json();
-  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit)\b/i;
+  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit|fashion|makeup|hair|skin|dance|kiss|romance|dating)\b/i;
 
   return data.videos
     .filter((v: any) => {
@@ -134,17 +133,17 @@ export const searchPixabayVideo = async (
      }];
   }
   
-  const safeQuery = query + " nature architecture light modest -woman -girl -female -sexy -adult -bikini -model -face";
+  const safeQuery = query + " nature landscape architecture modest -woman -girl -female -sexy -adult -bikini -model -face";
   
   const res = await fetch(
-    `https://pixabay.com/api/videos/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(safeQuery)}&per_page=15&safesearch=true`,
+    `https://pixabay.com/api/videos/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(safeQuery)}&per_page=40&safesearch=true`,
   );
   if (!res.ok) {
     if (res.status === 429) throw new Error("Pixabay API Rate Limit Exceeded");
     throw new Error(`Pixabay API Error: ${res.status}`);
   }
   const data = await res.json();
-  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit)\b/i;
+  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit|fashion|makeup|hair|skin|dance|kiss|romance|dating)\b/i;
   
   return data.hits
     .filter((v: any) => {
@@ -184,10 +183,11 @@ export const searchPexelsImage = async (
     }];
   }
   
-  const safeQuery = query + " nature architecture light modest -woman -girl -female -sexy -adult -bikini -model -face";
+  // Pexels DOES NOT support negative (-) keywords. Adding "-woman" will actually search FOR "woman"!
+  const pexelsSafeQuery = query + " nature landscape architecture macro sky";
 
   const res = await fetch(
-    `https://api.pexels.com/v1/search?query=${encodeURIComponent(safeQuery)}&orientation=${orientation}&per_page=15`,
+    `https://api.pexels.com/v1/search?query=${encodeURIComponent(pexelsSafeQuery)}&orientation=${orientation}&per_page=40`,
     {
       headers: { Authorization: PEXELS_API_KEY },
     },
@@ -197,7 +197,7 @@ export const searchPexelsImage = async (
     throw new Error(`Pexels API Error: ${res.status}`);
   }
   const data = await res.json();
-  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit)\b/i;
+  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit|fashion|makeup|hair|skin|dance|kiss|romance|dating)\b/i;
 
   return data.photos
     .filter((p: any) => {
@@ -232,17 +232,17 @@ export const searchPixabayImage = async (
     }];
   }
   
-  const safeQuery = query + " nature architecture light modest -woman -girl -female -sexy -adult -bikini -model -face";
+  const safeQuery = query + " nature landscape architecture modest -woman -girl -female -sexy -adult -bikini -model -face -portrait -beauty";
   
   const res = await fetch(
-    `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(safeQuery)}&image_type=photo&per_page=15&safesearch=true`,
+    `https://pixabay.com/api/?key=${PIXABAY_API_KEY}&q=${encodeURIComponent(safeQuery)}&image_type=photo&per_page=40&safesearch=true`,
   );
   if (!res.ok) {
     if (res.status === 429) throw new Error("Pixabay API Rate Limit Exceeded");
     throw new Error(`Pixabay API Error: ${res.status}`);
   }
   const data = await res.json();
-  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit)\b/i;
+  const forbiddenRegex = /\b(women|girls|females|woman|girl|female|lady|sexy|hot|adult|bikini|model|face|portrait|eyes|lips|body|people|person|man|boy|human|couple|bikinis|swimsuit|fashion|makeup|hair|skin|dance|kiss|romance|dating)\b/i;
   
   return data.hits
     .filter((p: any) => {

@@ -1716,6 +1716,12 @@ const App: React.FC = () => {
                           <option value={AnimationType.LEFT_TO_RIGHT}>
                             Slide Left to Right
                           </option>
+                          <option value={AnimationType.PAGE_SLIDING}>
+                            Page Sliding (Quotes)
+                          </option>
+                          <option value={AnimationType.PAGE_SCROLLING}>
+                            Page Scrolling
+                          </option>
                         </select>
                       </div>
                       <div className="space-y-3">
