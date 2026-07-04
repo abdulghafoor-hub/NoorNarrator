@@ -746,32 +746,47 @@ export const renderNarrationLayer = (
       const blockEndT = words[lastLineIndices[lastLineIndices.length - 1]].end;
       const blockDur = blockEndT - blockStartT;
 
-      const transitionDur = Math.min(0.2, blockDur * 0.2); // max 200ms or 20%
+      // Default transition speed (max 200ms) for standard focus/horizontal anims
+      const transitionDur = Math.min(0.2, blockDur * 0.2); 
       const slideInP = Math.min(
         1,
-        Math.max(0, (progress - blockStartT) / transitionDur),
+        Math.max(0, (progress - blockStartT) / transitionDur)
       );
       const slideOutP = Math.min(
         1,
-        Math.max(0, (blockEndT - progress) / transitionDur),
+        Math.max(0, (blockEndT - progress) / transitionDur)
       );
 
-      // Fading
+      // Apply default fading
       opacity *= slideInP * slideOutP;
 
-      // Page Sliding (Like quotes) - slides in from right, out to left
+      // --- 1. PAGE SLIDING ANIMATION (Fast Whip-Pan) ---
       if (isPageSliding) {
-        // Apply ease-out for slide in, ease-in for slide out
+        // Using Math.pow(..., 3) creates a much sharper, snappier "Cubic" ease-out 
+        // mimicking high-retention CapCut/TikTok style edits.
         const easeInOff = (1 - slideInP);
         const easeOutOff = (1 - slideOutP);
-        offsetX = (width * 1.2 * easeInOff * easeInOff) - (width * 1.2 * easeOutOff * easeOutOff);
+        offsetX = (width * 1.1 * Math.pow(easeInOff, 3)) - (width * 1.1 * Math.pow(easeOutOff, 3));
       }
       
-      // Page Scrolling - scrolls in from bottom, out to top
+      // --- 2. PAGE SCROLLING ANIMATION (Continuous Cinematic Drift) ---
       if (isPageScrolling) {
-        const easeInOff = (1 - slideInP);
-        const easeOutOff = (1 - slideOutP);
-        offsetY = (height * 1.2 * easeInOff * easeInOff) - (height * 1.2 * easeOutOff * easeOutOff);
+        // Calculate the total progress of the block from 0.0 to 1.0
+        const totalBlockProgress = Math.max(0, Math.min(1, (progress - blockStartT) / Math.max(0.001, blockDur)));
+        
+        // Continuous slow drift upward over the ENTIRE duration the text is on screen
+        const driftDistance = height * 0.08; // Drifts 8% of screen height
+        
+        // Starts slightly lower (+offset) and ends slightly higher (-offset)
+        offsetY = (driftDistance / 2) - (totalBlockProgress * driftDistance);
+
+        // Smoother, longer fade specifically for scrolling (looks more emotional/cinematic)
+        const scrollTransitionDur = Math.min(0.4, blockDur * 0.3); // 30% fade in/out
+        const scrollSlideIn = Math.min(1, Math.max(0, (progress - blockStartT) / scrollTransitionDur));
+        const scrollSlideOut = Math.min(1, Math.max(0, (blockEndT - progress) / scrollTransitionDur));
+        
+        // Override the default opacity to use the smoother scroll fade
+        opacity = scrollSlideIn * scrollSlideOut;
       }
     }
 
