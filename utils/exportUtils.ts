@@ -41,20 +41,95 @@ export const exportDeterministicVideo = async (
   const encWidth = width & ~1;
   const encHeight = height & ~1;
 
+  // Codec discovery to prevent "Encoder creation error"
+  let chosenVideoCodec = "";
+  let muxerVideoCodec: "avc" | "hevc" | "vp9" | "av1" = "avc";
+  
+  const videoCodecCandidates = [
+    { codec: "avc1.42e01f", muxerCodec: "avc" }, // H.264 Baseline, level 3.1 (Most widely supported)
+    { codec: "avc1.4d001f", muxerCodec: "avc" }, // H.264 Main, level 3.1
+    { codec: "avc1.4d002a", muxerCodec: "avc" }, // H.264 Main, level 4.2
+    { codec: "avc1.64002a", muxerCodec: "avc" }, // H.264 High, level 4.2
+    { codec: "avc1.42E028", muxerCodec: "avc" },
+    { codec: "vp09.00.10.08", muxerCodec: "vp9" }, // VP9
+    { codec: "vp8", muxerCodec: "vp9" },
+    { codec: "av01.0.04M.08", muxerCodec: "av1" }, // AV1
+  ] as const;
+
+  for (const candidate of videoCodecCandidates) {
+    const config: VideoEncoderConfig = {
+      codec: candidate.codec,
+      width: encWidth,
+      height: encHeight,
+      bitrate: 5_000_000,
+      framerate: fps,
+      ...(candidate.muxerCodec === "avc" ? { avc: { format: "avc" } } : {}),
+    };
+    try {
+      const support = await window.VideoEncoder.isConfigSupported(config);
+      if (support.supported) {
+        chosenVideoCodec = candidate.codec;
+        muxerVideoCodec = candidate.muxerCodec;
+        break;
+      }
+    } catch (e) {
+      // Ignore and try next candidate
+    }
+  }
+
+  if (!chosenVideoCodec) {
+    chosenVideoCodec = "avc1.42e01f";
+    muxerVideoCodec = "avc";
+  }
+
+  let chosenAudioCodec = "";
+  let muxerAudioCodec: "aac" | "opus" = "aac";
+
+  const audioCodecCandidates = [
+    { codec: "mp4a.40.2", muxerCodec: "aac" }, // AAC-LC
+    { codec: "mp4a.40.5", muxerCodec: "aac" }, // HE-AAC
+    { codec: "opus", muxerCodec: "opus" },
+  ] as const;
+
+  if (audioBuffer) {
+    for (const candidate of audioCodecCandidates) {
+      const config: AudioEncoderConfig = {
+        codec: candidate.codec,
+        sampleRate: 48000,
+        numberOfChannels: 2,
+        bitrate: 128_000,
+      };
+      try {
+        const support = await window.AudioEncoder.isConfigSupported(config);
+        if (support.supported) {
+          chosenAudioCodec = candidate.codec;
+          muxerAudioCodec = candidate.muxerCodec;
+          break;
+        }
+      } catch (e) {
+        // Ignore and try next
+      }
+    }
+    if (!chosenAudioCodec) {
+      chosenAudioCodec = "mp4a.40.2";
+      muxerAudioCodec = "aac";
+    }
+  }
+
   const target = new ArrayBufferTarget();
   const muxer = new Muxer({
     target,
     fastStart: "in-memory",
     video: {
-      codec: "avc",
+      codec: muxerVideoCodec,
       width: encWidth,
       height: encHeight,
     },
     audio: audioBuffer
       ? {
-          codec: "aac",
-          sampleRate: audioBuffer.sampleRate,
-          numberOfChannels: audioBuffer.numberOfChannels,
+          codec: muxerAudioCodec,
+          sampleRate: 48000,
+          numberOfChannels: 2,
         }
       : undefined,
   });
@@ -69,39 +144,20 @@ export const exportDeterministicVideo = async (
   });
 
   const videoConfig: VideoEncoderConfig = {
-    codec: "avc1.4d002a",
+    codec: chosenVideoCodec,
     width: encWidth,
     height: encHeight,
     bitrate: 5_000_000,
     framerate: fps,
-    avc: { format: "avc" },
+    ...(muxerVideoCodec === "avc" ? { avc: { format: "avc" } } : {}),
   };
-
-  const videoSupport = await window.VideoEncoder.isConfigSupported(videoConfig);
-  if (!videoSupport.supported) {
-    videoConfig.codec = "avc1.42E028";
-  }
 
   videoEncoder.configure(videoConfig);
 
   let audioEncoder: any = null;
   let audioError: any = null;
 
-  let finalAudioBuffer = audioBuffer;
   if (audioBuffer) {
-    const offlineCtx = new OfflineAudioContext(
-      2,
-      audioBuffer.duration * 48000,
-      48000
-    );
-    const source = offlineCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(offlineCtx.destination);
-    source.start();
-    finalAudioBuffer = await offlineCtx.startRendering();
-  }
-
-  if (finalAudioBuffer) {
     audioEncoder = new window.AudioEncoder({
       output: (chunk, meta) => muxer.addAudioChunk(chunk, meta as any),
       error: (e) => {
@@ -111,16 +167,12 @@ export const exportDeterministicVideo = async (
     });
 
     const audioConfig: AudioEncoderConfig = {
-      codec: "mp4a.40.2",
+      codec: chosenAudioCodec,
       sampleRate: 48000,
       numberOfChannels: 2,
       bitrate: 128_000,
     };
 
-    const audioSupport = await window.AudioEncoder.isConfigSupported(audioConfig);
-    if (!audioSupport.supported) {
-      audioConfig.codec = "mp4a.40.5"; 
-    }
     audioEncoder.configure(audioConfig);
   }
 
@@ -128,9 +180,9 @@ export const exportDeterministicVideo = async (
 
   // Audio state
   let audioOffset = 0;
-  const sampleRate = finalAudioBuffer ? finalAudioBuffer.sampleRate : 48000;
-  const channels = finalAudioBuffer ? finalAudioBuffer.numberOfChannels : 2;
-  const length = finalAudioBuffer ? finalAudioBuffer.length : 0;
+  const sampleRate = audioBuffer ? audioBuffer.sampleRate : 48000;
+  const channels = audioBuffer ? audioBuffer.numberOfChannels : 2;
+  const length = audioBuffer ? audioBuffer.length : 0;
   
   // Use exactly 1 second of frames per chunk so timestamp calculations 
   // produce perfectly round integers to avoid AAC WebCodecs bugs
@@ -143,7 +195,7 @@ export const exportDeterministicVideo = async (
     const time = i / fps;
 
     // 1. Encode Audio up to this time
-    if (audioEncoder && finalAudioBuffer) {
+    if (audioEncoder && audioBuffer) {
       while (
         audioOffset < length &&
         audioOffset / sampleRate <= time + 1 / fps
@@ -163,7 +215,7 @@ export const exportDeterministicVideo = async (
 
         const f32Arrays = [];
         for (let c = 0; c < channels; c++) {
-          f32Arrays.push(finalAudioBuffer.getChannelData(c).slice(audioOffset, end));
+          f32Arrays.push(audioBuffer.getChannelData(c).slice(audioOffset, end));
         }
 
         const combined = new Float32Array(actualFrames * channels);
